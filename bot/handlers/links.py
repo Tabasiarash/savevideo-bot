@@ -2,7 +2,7 @@
 
 Also implements deep-link starts, playlist mode, media-groups for multi-item
 posts and the size-limit fallback chain (lower quality → ffmpeg re-encode →
-clear error).
+split into parts → clear error).
 """
 
 from __future__ import annotations
@@ -435,9 +435,24 @@ async def _fit_video_size(
             break
 
     if current_size > limit:
-        await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
-        await _record(srv.db, 0, flow.url, flow.url_site, fmt, "error", "too_large", current_size, flow.duration)
-        return None
+        # Last resort: split into <=limit parts (mirrors the audio path).
+        try:
+            outdir = flow.tmpdir / "split"
+            outdir.mkdir(parents=True, exist_ok=True)
+
+            async def _on_part(part: int, total_parts: int) -> None:
+                await _edit(
+                    message=flow.status_message,
+                    body=text(lang, "split_sending", part=part, total=total_parts),
+                )
+
+            # Small safety margin: VBR streams can exceed the nominal ratio.
+            return await split_media_by_size(current, outdir, int(limit * 0.95), _on_part)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("video split failed: %s", exc)
+            await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
+            await _record(srv.db, 0, flow.url, flow.url_site, fmt, "error", "too_large", current_size, flow.duration)
+            return None
     return parts
 
 

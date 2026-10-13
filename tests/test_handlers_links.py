@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from bot.handlers import links
-from bot.services.downloader import InfoError
+from bot.services.downloader import DownloadError, InfoError
 from bot.utils import URLBlockedError
 
 USER = 42
@@ -237,10 +237,44 @@ async def test_size_fallback_impossible_gives_error(services, runner, make_messa
     async def failing_transcode(*args, **kwargs):
         raise RuntimeError("ffmpeg failed")
 
+    async def failing_split(*args, **kwargs):
+        raise DownloadError("cannot split")
+
     monkeypatch.setattr(links, "transcode_to_size", failing_transcode)
+    monkeypatch.setattr(links, "split_media_by_size", failing_split)
     result = await links._fit_video_size(services, flow, "video_720", [big], 5_000_000, 1024)
     assert result is None
     assert any("cannot be made to fit" in e for e in msg.edits)
+
+
+async def test_video_fallback_splits_when_reencode_impossible(
+    services, runner, make_message, monkeypatch
+):
+    msg = make_message()
+    flow = await _open_flow(services, msg, runner)
+    flow.video_heights = [720]
+    big = flow.tmpdir / "media.mp4"
+    big.parent.mkdir(parents=True, exist_ok=True)
+    big.write_bytes(b"\x00" * 5_000_000)
+
+    async def failing_transcode(*args, **kwargs):
+        raise DownloadError("cannot fit")
+
+    async def fake_split(input_path, outdir, limit_bytes, on_part):
+        outdir.mkdir(parents=True, exist_ok=True)
+        parts = [Path(outdir) / "p1.mp4", Path(outdir) / "p2.mp4"]
+        for p in parts:
+            p.write_bytes(b"\x00" * 10)
+        await on_part(1, 2)
+        await on_part(2, 2)
+        return parts
+
+    monkeypatch.setattr(links, "transcode_to_size", failing_transcode)
+    monkeypatch.setattr(links, "split_media_by_size", fake_split)
+    result = await links._fit_video_size(services, flow, "video_720", [big], 5_000_000, 1024)
+    assert result is not None and len(result) == 2
+    assert not any("cannot be made to fit" in e for e in msg.edits)
+
 
 
 async def test_audio_fallback_splits(services, runner, make_message, monkeypatch):
