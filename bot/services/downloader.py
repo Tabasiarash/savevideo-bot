@@ -14,8 +14,10 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,7 @@ log = logging.getLogger(__name__)
 _PROGRESS_RE = re.compile(r"\[download\]\s+([\d.]+)%")
 
 _YT_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
+EGRESS_CACHE_TTL = 300.0
 
 ProgressCallback = Callable[[float, int, int], Awaitable[None]]
 VoidCallback = Callable[[], Awaitable[None]]
@@ -109,6 +112,8 @@ class YtDlpRunner:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._yt_sem = asyncio.Semaphore(max(1, settings.yt_max_concurrency))
+        self._egress_cache: tuple[float, str, EgressProbe] | None = None
 
     def _extra_args(
         self,
@@ -128,14 +133,25 @@ class YtDlpRunner:
         args += self._cookie_args(cookiejar_dir)
         if self.settings.proxy_url:
             args += ["--proxy", self.settings.proxy_url]
-        if self.settings.force_ipv4:
+        # The IP-family overrides can fight the proxy's routing, so only apply
+        # them when talking to the origin directly.
+        elif self.settings.force_ipv4:
             args += ["--force-ipv4"]
         elif self.settings.force_ipv6 and _is_youtube_url(url):
             args += ["--force-ipv6"]
         runtime = detect_js_runtime(self.settings)
         if runtime:
             args += ["--js-runtimes", runtime]
-        args += ["--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3"]
+        args += [
+            "--socket-timeout",
+            "30",
+            "--retries",
+            "10",
+            "--fragment-retries",
+            "10",
+            "--sleep-requests",
+            "1",
+        ]
         args += shlex.split(self.settings.ytdlp_extra_args or "")
         return args
 
@@ -293,7 +309,9 @@ class YtDlpRunner:
         if job.format_key.startswith("video"):
             # Put the moov atom first so uploads/seeking are efficient.
             args += ["--postprocessor-args", "Merger:-movflags +faststart"]
-        args += self._format_args(job.format_key, job.height, job.audio_codec)
+        args += self._format_args(
+            job.format_key, job.height, job.audio_codec, self.settings.max_video_height
+        )
         if write_thumbnail:
             args += ["--write-thumbnail", "--convert-thumbnails", "jpg"]
         args.append(job.url)
@@ -301,18 +319,25 @@ class YtDlpRunner:
         if job.format_key.startswith("audio"):
             args += ["-x"]
 
-        await self._run_and_read_progress(
-            args,
-            on_progress=on_progress,
-            timeout=self.settings.download_timeout,
-            start_callback=start_callback,
-        )
+        async with self._yt_sem:
+            await self._run_and_read_progress(
+                args,
+                on_progress=on_progress,
+                timeout=self.settings.download_timeout,
+                start_callback=start_callback,
+            )
         return _collect_media_files(job.tmpdir)
 
     @staticmethod
-    def _format_args(format_key: str, height: int | None, audio_codec: str | None) -> list[str]:
+    def _format_args(
+        format_key: str,
+        height: int | None,
+        audio_codec: str | None,
+        max_height: int | None = None,
+    ) -> list[str]:
         if format_key == "video_best":
-            return ["-f", "bv*+ba/b"]
+            cap = max_height or 1080
+            return ["-f", f"bv*[height<={cap}]+ba/b[height<={cap}]/b"]
         if format_key.startswith("video_"):
             spec = f"bv*[height<={height}]+ba/b[height<={height}]" if height else "bv*+ba/b"
             return ["-f", spec]
@@ -365,6 +390,10 @@ class YtDlpRunner:
         target = (url or self.settings.egress_test_url or "").strip()
         if not target:
             return EgressProbe(ok=False, detail="no test url configured")
+        now = time.monotonic()
+        cached = self._egress_cache
+        if cached and cached[1] == target and now - cached[0] < EGRESS_CACHE_TTL:
+            return cached[2]
         staged_dir = self._make_cookiejar_dir()
         try:
             args = [
@@ -380,10 +409,12 @@ class YtDlpRunner:
                 "%(title)s",
                 target,
             ]
-            return await self._run_probe(args)
+            result = await self._run_probe(args)
         finally:
             if staged_dir is not None:
                 shutil.rmtree(staged_dir, ignore_errors=True)
+        self._egress_cache = (now, target, result)
+        return result
 
     async def _run_probe(self, args: list[str]) -> EgressProbe:
         try:
@@ -421,12 +452,40 @@ def _is_youtube_url(url: str | None) -> bool:
     return any(host == h or host.endswith("." + h) for h in _YT_HOSTS)
 
 
+_NODE_MIN_MAJOR = 22
+
+
+def _node_version() -> str | None:
+    path = shutil.which("node")
+    if not path:
+        return None
+    try:
+        out = subprocess.run(
+            [path, "--version"], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip().lstrip("v") or None
+
+
+def _node_supported() -> bool:
+    version = _node_version()
+    if not version:
+        return False
+    try:
+        return int(version.split(".", 1)[0]) >= _NODE_MIN_MAJOR
+    except ValueError:
+        return False
+
+
 def detect_js_runtime(settings: Settings) -> str | None:
     """Pick the JS runtime for yt-dlp's extraction (``--js-runtimes``).
 
     ``JS_RUNTIME=auto`` prefers Deno (yt-dlp's recommended runtime) and falls
-    back to Node. An explicit value is honoured if the binary is on PATH, or
-    passed through verbatim when it carries a ``name:path`` override.
+    back to Node, but only when it is new enough (>=22) — older Node versions
+    cannot solve the challenges and would just fail. An explicit value is
+    honoured if the binary is on PATH, or passed through verbatim when it
+    carries a ``name:path`` override.
     """
     requested = (getattr(settings, "js_runtime", "") or "").strip()
     if requested and requested.lower() != "auto":
@@ -434,9 +493,10 @@ def detect_js_runtime(settings: Settings) -> str | None:
         if ":" in requested or shutil.which(name):
             return requested
         return None
-    for name in ("deno", "node"):
-        if shutil.which(name):
-            return name
+    if shutil.which("deno"):
+        return "deno"
+    if _node_supported():
+        return "node"
     return None
 
 
@@ -751,9 +811,22 @@ def estimate_format_size(info: dict[str, Any], height: int) -> int | None:
     return video_size + audio_size
 
 
-def best_estimate(info: dict[str, Any]) -> int | None:
-    """Size estimate for the "Best" option (top height merged with best audio)."""
-    height = max((f["height"] for f in info.get("formats") or [] if f.get("height")), default=0)
+def best_estimate(info: dict[str, Any], max_height: int | None = None) -> int | None:
+    """Size estimate for the "Best" option (top height merged with best audio).
+
+    When ``max_height`` is given the estimate reflects the capped default
+    download, ignoring formats above the cap (falling back to all formats if the
+    cap would leave nothing available).
+    """
+    formats = info.get("formats") or []
+    heights = [
+        f["height"]
+        for f in formats
+        if f.get("height") and (not max_height or f["height"] <= max_height)
+    ]
+    if not heights and max_height:
+        heights = [f["height"] for f in formats if f.get("height")]
+    height = max(heights, default=0)
     if not height:
         sizes = []
         for f in info.get("formats") or []:
@@ -770,13 +843,16 @@ def video_quality_rows(
     prefix: str = "dl",
     max_heights: int = 6,
     limit_bytes: int | None = None,
+    max_height: int | None = None,
 ) -> list[list[FormatOption]]:
     """Build rows of video quality buttons from a real yt-dlp info dict.
 
     Heights are gathered from actual formats, deduplicated, capped at
     ``max_heights`` (spread evenly), followed by a "Best" entry. When
     ``limit_bytes`` is given, options whose estimate exceeds the limit are
-    flagged as ``too_large`` so the caller can mark them.
+    flagged as ``too_large`` so the caller can mark them. ``max_height`` caps
+    the default "Best" download (and its estimate) without hiding the explicit
+    higher-quality choices.
     """
     from bot.utils import fits_upload_limit, format_size
 
@@ -821,7 +897,7 @@ def video_quality_rows(
             ]
         )
 
-    best_size = best_estimate(info)
+    best_size = best_estimate(info, max_height)
     best_label = "Best"
     if best_size:
         best_label += f" · {format_size(best_size)}"

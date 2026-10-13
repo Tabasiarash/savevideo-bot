@@ -74,8 +74,36 @@ async def test_health(services, make_message, monkeypatch):
     await admin.cmd_health(msg)
     body = msg.sent[0]
     assert "yt-dlp" in msg.sent[0]
-    for expected in ("Proxy: off", "Cookies: none", "JS runtime: deno", "curl_cffi: 0.13.0", "Egress: ✅"):
+    for expected in (
+        "Proxy: off",
+        "Cookies: none",
+        "JS runtime: deno",
+        "curl_cffi: 0.13.0",
+        "Egress: ✅",
+        "Mode: cloud",
+        "Upload limit: 50 MB",
+        "Bot API: cloud",
+        "Data dir: n/a",
+    ):
         assert expected in body
+
+
+async def test_health_local_mode_reports_api_and_data_dir(
+    services, make_message, monkeypatch, tmp_path
+):
+    async def fake_version():
+        return "2026.01.01"
+
+    monkeypatch.setattr(admin, "cli_version", fake_version)
+    monkeypatch.setattr(admin, "_ffmpeg_version", lambda: "ffmpeg version test")
+    monkeypatch.setattr(admin.settings, "bot_api_url", "http://127.0.0.1:8081")
+    monkeypatch.setattr(admin.settings, "bot_api_data_dir", str(tmp_path))
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_health(msg)
+    body = msg.sent[0]
+    assert "Mode: local" in body
+    assert "Bot API: ok @testbot" in body
+    assert "Data dir: n/a" not in body
 
 
 async def test_health_masks_proxy_and_reports_failure(services, make_message, monkeypatch):

@@ -295,7 +295,7 @@ async def _send_thumbnail(callback: CallbackQuery, bot: Bot, flow: PendingFlow, 
 def _estimate_selected(flow: PendingFlow, fmt: str) -> int | None:
     """Estimated download size for the chosen format, when it can be known."""
     if fmt == "video_best":
-        return best_estimate(flow.info)
+        return best_estimate(flow.info, settings.max_video_height)
     if fmt.startswith("video_"):
         height = _height_of(fmt)
         return estimate_format_size(flow.info, height) if height else None
@@ -743,7 +743,10 @@ def _build_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     marker = text(flow.lang, "too_large_marker")
     for quality_row in video_quality_rows(
-        flow.info, prefix=flow.prefix, limit_bytes=settings.upload_limit_bytes
+        flow.info,
+        prefix=flow.prefix,
+        limit_bytes=settings.upload_limit_bytes,
+        max_height=settings.max_video_height,
     ):
         rows.append(
             [

@@ -163,7 +163,7 @@ async def cmd_health(message: Message) -> None:
     version = await cli_version()
     ffmpeg = _ffmpeg_version()
     free = disk_free_bytes(settings.temp_dir_resolved)
-    mode = "local" if settings.local_api else "cloud"
+    mode = "local" if settings.is_local_api else "cloud"
     probe = await srv.runner.probe_egress(settings.egress_test_url)
     egress = f"✅ {probe.detail}" if probe.ok else f"❌ {probe.detail}"
     await message.answer(
@@ -176,6 +176,9 @@ async def cmd_health(message: Message) -> None:
             queue_len=srv.queue.waiting,
             active=srv.queue.active,
             mode=mode,
+            limit=settings.max_mb,
+            api=await _bot_api_status(srv),
+            data_dir=_data_dir_status(),
             proxy=mask_proxy(settings.proxy_url),
             cookies=_cookies_status(settings.cookies_file),
             js_runtime=detect_js_runtime(settings) or "none",
@@ -185,6 +188,26 @@ async def cmd_health(message: Message) -> None:
             egress=egress,
         )
     )
+
+
+async def _bot_api_status(srv) -> str:
+    if not settings.is_local_api:
+        return "cloud"
+    try:
+        me = await srv.bot.me()
+    except Exception as exc:  # noqa: BLE001
+        return f"unreachable ({type(exc).__name__})"
+    username = getattr(me, "username", None)
+    return f"ok @{username}" if username else "ok"
+
+
+def _data_dir_status() -> str:
+    if not settings.is_local_api:
+        return "n/a"
+    try:
+        return format_size(disk_free_bytes(settings.bot_api_data_dir))
+    except OSError:
+        return "unavailable"
 
 
 def _cookies_status(path: str) -> str:

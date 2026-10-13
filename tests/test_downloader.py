@@ -35,7 +35,14 @@ def test_format_args_video():
         "-f",
         "bv*[height<=720]+ba/b[height<=720]",
     ]
-    assert YtDlpRunner._format_args("video_best", None, None) == ["-f", "bv*+ba/b"]
+    assert YtDlpRunner._format_args("video_best", None, None) == [
+        "-f",
+        "bv*[height<=1080]+ba/b[height<=1080]/b",
+    ]
+    assert YtDlpRunner._format_args("video_best", None, None, 720) == [
+        "-f",
+        "bv*[height<=720]+ba/b[height<=720]/b",
+    ]
 
 
 def test_format_args_audio():
@@ -161,6 +168,12 @@ def test_best_estimate_uses_top_height():
     assert best_estimate(INFO) == 42_000_000
 
 
+def test_best_estimate_respects_cap():
+    assert best_estimate(INFO, 720) == 22_000_000
+    assert best_estimate(INFO, 480) == 12_000_000
+    assert best_estimate(INFO, 100) == 42_000_000  # nothing under cap -> all formats
+
+
 def test_helpers_on_real_paths(tmp_path):
     assert ensure_ffmpeg_available() in (True, False)
     assert disk_free_bytes(tmp_path) > 0
@@ -215,6 +228,15 @@ def test_force_ipv4_global(monkeypatch):
     runner = YtDlpRunner(_settings(force_ipv4=True))
     args = runner._extra_args(playlist=False, playlist_items=None, url="https://vimeo.com/1")
     assert "--force-ipv4" in args
+    assert "--force-ipv6" not in args
+
+
+def test_force_ip_family_skipped_when_proxy_set(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(force_ipv4=True, proxy_url="socks5h://127.0.0.1:1080"))
+    args = runner._extra_args(playlist=False, playlist_items=None, url="https://vimeo.com/1")
+    assert "--proxy" in args
+    assert "--force-ipv4" not in args
     assert "--force-ipv6" not in args
 
 
@@ -281,6 +303,18 @@ def test_detect_js_runtime_explicit_path_passthrough(monkeypatch):
     assert detect_js_runtime(_settings(js_runtime="deno:/custom/deno")) == "deno:/custom/deno"
 
 
+def test_detect_js_runtime_skips_old_node(monkeypatch):
+    monkeypatch.setattr(dl.shutil, "which", lambda name: "/usr/bin/node" if name == "node" else None)
+    monkeypatch.setattr(dl, "_node_version", lambda: "18.19.0")
+    assert detect_js_runtime(_settings()) is None
+
+
+def test_detect_js_runtime_accepts_new_node(monkeypatch):
+    monkeypatch.setattr(dl.shutil, "which", lambda name: "/usr/bin/node" if name == "node" else None)
+    monkeypatch.setattr(dl, "_node_version", lambda: "22.1.0")
+    assert detect_js_runtime(_settings()) == "node"
+
+
 def test_mask_proxy():
     assert mask_proxy("") == "off"
     assert mask_proxy("socks5h://user:secret@100.64.0.5:1080") == "socks5h://***@100.64.0.5:1080"
@@ -342,3 +376,17 @@ async def test_probe_egress_bot_wall(monkeypatch):
 async def test_probe_egress_no_url(monkeypatch):
     probe = await YtDlpRunner(_settings(egress_test_url="")).probe_egress("")
     assert not probe.ok
+
+
+async def test_probe_egress_caches_result(monkeypatch):
+    calls = {"n": 0}
+
+    async def fake_exec(*args, **kwargs):
+        calls["n"] += 1
+        return _FakeProc(out=b"Me at the zoo\n", rc=0)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    runner = YtDlpRunner(_settings())
+    await runner.probe_egress("https://www.youtube.com/watch?v=x")
+    await runner.probe_egress("https://www.youtube.com/watch?v=x")
+    assert calls["n"] == 1
