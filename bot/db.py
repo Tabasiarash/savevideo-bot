@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
@@ -222,7 +223,7 @@ class Database:
         return int(row["c"]) if row else 0
 
     async def downloads_today(self) -> int:
-        start = int(time.time()) - 24 * 3600
+        start = int(datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
         assert self._conn is not None
         cur = await self._conn.execute("SELECT COUNT(*) AS c FROM downloads WHERE created_at >= ?", (start,))
         row = await cur.fetchone()
@@ -303,7 +304,7 @@ class Database:
     async def purge_cache_expired(self, ttl_s: int) -> int:
         assert self._conn is not None
         now = int(time.time())
-        cur = await self._conn.execute("DELETE FROM cache WHERE created_at < ?", (now - ttl_s))
+        cur = await self._conn.execute("DELETE FROM cache WHERE created_at < ?", (now - ttl_s,))
         await self._conn.commit()
         return int(cur.rowcount)
 
@@ -326,7 +327,7 @@ class Database:
     async def purge_deeplinks(self, max_age_s: int) -> int:
         assert self._conn is not None
         now = int(time.time())
-        cur = await self._conn.execute("DELETE FROM deeplinks WHERE created_at < ?", (now - max_age_s))
+        cur = await self._conn.execute("DELETE FROM deeplinks WHERE created_at < ?", (now - max_age_s,))
         await self._conn.commit()
         return int(cur.rowcount)
 

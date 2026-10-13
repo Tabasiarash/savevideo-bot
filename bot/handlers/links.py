@@ -476,7 +476,7 @@ async def _upload_video_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path]
         kwargs: dict[str, Any] = {
             "supports_streaming": True,
             "width": _width_of(flow),
-            "height": _height_of(flow),
+            "height": _height_of(fmt),
             "duration": int(flow.duration) if flow.duration else None,
         }
         if thumb:

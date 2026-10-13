@@ -352,13 +352,14 @@ def language_code_to_code(language_code: str | None, default_language: str = "en
     return default_language
 
 
-def get_text(lang: str, key: str, default_language: str | None = None, **kwargs: Any) -> str:
+def get_text(lang_code: str, key: str, default_language: str | None = None, **kwargs: Any) -> str:
     """Return a translated string, formatting it with ``kwargs``.
 
-    ``lang`` should be either a Telegram language_code or one of our supported
-    language codes; it is resolved through :func:`language_code_to_code`.
+    ``lang_code`` should be either a Telegram language_code or one of our
+    supported language codes; it is resolved through
+    :func:`language_code_to_code`.
     """
-    resolved = language_code_to_code(lang, default_language or "en")
+    resolved = language_code_to_code(lang_code, default_language or "en")
     if key not in _STRINGS[resolved]:
         if key not in _STRINGS[EN]:
             return key

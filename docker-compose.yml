@@ -1,0 +1,64 @@
+# savevideo-bot — production compose stack
+#
+# Quick start (cloud Bot API, files <= 50 MB):
+#   cp .env.example .env   # then set BOT_TOKEN
+#   docker compose up -d --build
+#
+# Large files (up to 2000 MB) via a local Bot API server:
+#   1) set LOCAL_API=true and LOCAL_API_BASE=http://telegram-bot-api:8081 in .env
+#   2) set TELEGRAM_API_ID and TELEGRAM_API_HASH in .env
+#   3) docker compose --profile localapi up -d --build
+#   NOTE: the first time you switch to a local server you must log the bot out
+#         of the cloud API (call https://api.telegram.org/bot<token>/logOut).
+#
+# Optional cookies for age/region restricted videos:
+#   place a Netscape cookies.txt at ./cookies/cookies.txt and set
+#   COOKIES_FILE=/cookies/cookies.txt in .env (mounted read-only below).
+
+services:
+  bot:
+    build: .
+    image: savevideo-bot:latest
+    env_file: .env
+    environment:
+      DB_PATH: /data/savevideo.db
+      TEMP_DIR: /tmp/savevideo
+    volumes:
+      - bot-data:/data
+      - bot-tmp:/tmp/savevideo
+      - ./cookies:/cookies:ro
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import bot.main, yt_dlp"]
+      interval: 60s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
+
+  # Optional local Bot API server. Enabled only with --profile localapi.
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    profiles: ["localapi"]
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - botapi-data:/var/lib/telegram-bot-api
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  bot-data:
+  bot-tmp:
+  botapi-data:

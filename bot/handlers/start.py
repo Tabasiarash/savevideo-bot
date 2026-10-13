@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import time
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
@@ -76,6 +77,7 @@ async def on_language_pick(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer()
         return
     # The user may not exist yet when they only ever used inline mode.
+    await srv.db.upsert_user(user_id, getattr(callback.from_user, "username", None), int(time.time()))
     await srv.db.set_language(user_id, code)
     await callback.answer(get_text(code, "language_set", lang=LANGUAGE_NAMES[code]))
     with contextlib.suppress(Exception):  # callback message may be inline

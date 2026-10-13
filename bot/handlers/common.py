@@ -43,5 +43,5 @@ async def safe_delete(message: Message) -> None:
         log.debug("could not delete message %s", getattr(message, "message_id", None))
 
 
-def text(lang: str, key: str, **kwargs) -> str:
-    return get_text(lang, key, settings.default_language, **kwargs)
+def text(lang_code: str, key: str, **kwargs) -> str:
+    return get_text(lang_code, key, settings.default_language, **kwargs)

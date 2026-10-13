@@ -280,7 +280,8 @@ class YtDlpRunner:
 # --------------------------------------------------------------------------
 
 def _parse_size(number: str, unit: str) -> int:
-    mult = {"B": 1, "K": 1024, "Ki": 1024, "KB": 1024, "M": 1024**2, "MB": 1024**2, "G": 1024**3, "GB": 1024**3}
+    unit = unit.replace("i", "").replace("I", "").upper()
+    mult = {"B": 1, "K": 1024, "KB": 1024, "M": 1024**2, "MB": 1024**2, "G": 1024**3, "GB": 1024**3}
     return int(float(number) * mult.get(unit, 1))
 
 
