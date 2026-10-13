@@ -44,8 +44,8 @@ fi
 log "installing application to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 if [[ "$(readlink -f "$SRC_DIR")" != "$(readlink -f "$INSTALL_DIR")" ]]; then
-    if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git -C "$SRC" archive --format=tar HEAD | tar -x -C "$INSTALL_DIR"
+    if git -C "$SRC_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$SRC_DIR" archive --format=tar HEAD | tar -x -C "$INSTALL_DIR"
     else
         tar -C "$SRC_DIR" \
             --exclude=.git --exclude=.env --exclude=.venv --exclude=venv \
