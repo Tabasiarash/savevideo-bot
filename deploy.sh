@@ -43,16 +43,24 @@ fi
 # --- sync code -------------------------------------------------------------
 log "installing application to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-if [[ "$(readlink -f "$SRC")" != "$(readlink -f "$INSTALL_DIR")" ]]; then
+if [[ "$(readlink -f "$SRC_DIR")" != "$(readlink -f "$INSTALL_DIR")" ]]; then
     if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git -C "$SRC" archive --format=tar HEAD | tar -x -C "$INSTALL_DIR"
     else
-        tar -C "$SRC" \
-            --exclude=.git --exclude=.venv --exclude=venv \
+        tar -C "$SRC_DIR" \
+            --exclude=.git --exclude=.env --exclude=.venv --exclude=venv \
             --exclude=data --exclude=tmp --exclude=__pycache__ \
             --exclude=.pytest_cache --exclude=.ruff_cache --exclude='*.pyc' \
             -cf - . | tar -x -C "$INSTALL_DIR"
     fi
+fi
+
+# .env is gitignored so it never travels with the code; carry it over on first
+# install without clobbering an existing install-dir .env on later updates.
+if [[ "$(readlink -f "$SRC_DIR")" != "$(readlink -f "$INSTALL_DIR")" \
+      && -f "$SRC_DIR/.env" && ! -f "$INSTALL_DIR/.env" ]]; then
+    log "copying .env to $INSTALL_DIR/.env"
+    install -m 0600 "$SRC_DIR/.env" "$INSTALL_DIR/.env"
 fi
 
 mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/tmp"
