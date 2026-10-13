@@ -27,15 +27,37 @@ log = logging.getLogger("savevideo-bot")
 
 def build_bot() -> Bot:
     defaults = DefaultBotProperties(parse_mode=ParseMode.HTML)
-    if settings.local_api or (settings.telegram_api_id and settings.telegram_api_hash):
-        from aiogram.client.api import TelegramAPIServer
+    if settings.bot_api_url:
         from aiogram.client.session.aiohttp import AiohttpSession
+        from aiogram.client.telegram import TelegramAPIServer
 
-        api = TelegramAPIServer.from_base(settings.local_api_base)
-        session = AiohttpSession(api=api)
-        log.info("using local Bot API at %s", settings.local_api_base)
+        api = TelegramAPIServer.from_base(settings.bot_api_url, is_local=True)
+        session = AiohttpSession(api=api, timeout=settings.upload_timeout_seconds)
+        log.info(
+            "using local Bot API at %s (upload limit %s MB)",
+            settings.bot_api_url,
+            settings.max_upload_mb,
+        )
         return Bot(token=settings.bot_token, session=session, default=defaults)
     return Bot(token=settings.bot_token, default=defaults)
+
+
+async def verify_bot_api(bot: Bot) -> None:
+    """Fail fast if the configured Bot API server is not reachable."""
+    target = settings.bot_api_url or "https://api.telegram.org"
+    mode = "local" if settings.is_local_api else "cloud"
+    try:
+        me = await bot.get_me()
+    except Exception as exc:  # noqa: BLE001
+        log.error("Bot API unreachable at %s (mode=%s): %s", target, mode, exc)
+        raise
+    log.info(
+        "Bot API reachable at %s (mode=%s, max_upload=%s MB) as @%s",
+        target,
+        mode,
+        settings.max_upload_mb,
+        me.username,
+    )
 
 
 def build_dispatcher() -> Dispatcher:
@@ -116,6 +138,7 @@ async def main() -> None:
 
     bot = build_bot()
     srv.bot = bot
+    await verify_bot_api(bot)
 
     await srv.db.connect()
     await srv.db.purge_cache_expired(settings.cache_ttl_s)

@@ -49,6 +49,54 @@ def test_installs_local_api_flag():
     assert _settings(telegram_api_id=1).installs_local_api is True
 
 
+def test_max_upload_mb_default_is_cloud_50():
+    s = _settings()
+    assert s.max_upload_mb == 50
+    assert s.is_local_api is False
+
+
+def test_bot_api_url_auto_raises_limit_to_2000():
+    s = _settings(bot_api_url="http://127.0.0.1:8081")
+    assert s.is_local_api is True
+    assert s.max_upload_mb == 2000
+
+
+def test_explicit_max_upload_mb_wins_over_auto():
+    s = _settings(bot_api_url="http://127.0.0.1:8081", max_upload_mb=500)
+    assert s.max_upload_mb == 500
+
+
+def test_max_upload_mb_clamped_to_ceiling():
+    assert _settings(max_upload_mb=99999).max_upload_mb == 2000
+
+
+def test_legacy_max_mb_alias_still_works():
+    assert _settings(max_mb=75).max_upload_mb == 75
+
+
+def test_legacy_local_api_derives_bot_api_url():
+    s = _settings(local_api=True, local_api_base="http://telegram-bot-api:8081")
+    assert s.is_local_api is True
+    assert s.bot_api_url == "http://telegram-bot-api:8081"
+    assert s.max_upload_mb == 2000
+
+
+def test_upload_timeout_default():
+    assert _settings().upload_timeout_seconds == 3600
+
+
+def test_js_runtime_env_aliases(monkeypatch):
+    monkeypatch.delenv("JS_RUNTIME", raising=False)
+    monkeypatch.setenv("YTDLP_JS_RUNTIME", "deno")
+    assert Settings(_env_file=None, bot_token="x").js_runtime == "deno"
+
+
+def test_max_upload_mb_env_alias(monkeypatch):
+    monkeypatch.delenv("MAX_UPLOAD_MB", raising=False)
+    monkeypatch.setenv("MAX_MB", "123")
+    assert Settings(_env_file=None, bot_token="x").max_upload_mb == 123
+
+
 def test_blank_token_allowed_but_empty(monkeypatch):
     s = _settings()
     assert s.bot_token == "x"

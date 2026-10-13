@@ -202,7 +202,8 @@ def _default_info() -> dict:
 def settings(tmp_path, monkeypatch):
     """Point the global settings singleton at throwaway paths for this test."""
     monkeypatch.setattr(real_settings, "admin_ids", [ADMIN_ID], raising=False)
-    monkeypatch.setattr(real_settings, "max_mb", 50, raising=False)
+    monkeypatch.setattr(real_settings, "max_upload_mb", 50, raising=False)
+    monkeypatch.setattr(real_settings, "bot_api_url", "", raising=False)
     monkeypatch.setattr(real_settings, "temp_dir", str(tmp_path / "tmp"), raising=False)
     monkeypatch.setattr(real_settings, "db_path", str(tmp_path / "db.sqlite"), raising=False)
     monkeypatch.setattr(real_settings, "per_user_daily_limit", 30, raising=False)

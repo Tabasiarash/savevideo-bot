@@ -5,11 +5,14 @@
 #   docker compose up -d --build
 #
 # Large files (up to 2000 MB) via a local Bot API server:
-#   1) set LOCAL_API=true and LOCAL_API_BASE=http://telegram-bot-api:8081 in .env
+#   1) set BOT_API_URL=http://telegram-bot-api:8081 in .env
+#      (legacy: LOCAL_API=true + LOCAL_API_BASE=http://telegram-bot-api:8081)
 #   2) set TELEGRAM_API_ID and TELEGRAM_API_HASH in .env
 #   3) docker compose --profile localapi up -d --build
 #   NOTE: the first time you switch to a local server you must log the bot out
 #         of the cloud API (call https://api.telegram.org/bot<token>/logOut).
+#   NOTE: the bot and the telegram-bot-api container must share the directory
+#         where the bot writes downloads (see deploy/telegram-bot-api/).
 #
 # Optional cookies for age/region restricted videos:
 #   place a Netscape cookies.txt at ./cookies/cookies.txt and set
