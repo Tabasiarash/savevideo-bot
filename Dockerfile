@@ -7,8 +7,18 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Deno: yt-dlp's recommended JS runtime for YouTube's signature/PO-token
+# challenges (the shipped image would otherwise have no JS engine).
+ARG DENO_VERSION=2.5.4
+RUN curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" \
+        -o /tmp/deno.zip \
+    && unzip -q /tmp/deno.zip -d /usr/local/bin \
+    && chmod 0755 /usr/local/bin/deno \
+    && rm -f /tmp/deno.zip \
+    && deno --version
 
 # Dedicated virtualenv so the non-root user can self-update yt-dlp at runtime.
 RUN python -m venv /opt/venv \

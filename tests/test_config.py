@@ -61,6 +61,30 @@ def test_defaults_are_graceful():
     assert s.default_language == "en"
 
 
+def test_anti_blocking_defaults():
+    s = _settings()
+    assert s.proxy_url == ""
+    assert s.cookies_file == ""
+    assert s.ytdlp_extra_args == ""
+    assert s.force_ipv4 is False
+    assert s.force_ipv6 is False
+    assert s.js_runtime == "auto"
+    assert s.egress_test_url.startswith("https://")
+
+
+def test_anti_blocking_overrides():
+    s = _settings(
+        force_ipv4=True,
+        force_ipv6=True,
+        js_runtime="deno",
+        ytdlp_extra_args="--extractor-args youtube:player_client=web",
+        proxy_url="socks5h://127.0.0.1:1080",
+    )
+    assert s.force_ipv4 is True
+    assert s.js_runtime == "deno"
+    assert "player_client" in s.ytdlp_extra_args
+
+
 @pytest.mark.parametrize("bad", ["notanint", "1,abc"])
 def test_admin_ids_invalid_raises(bad):
     with pytest.raises(ValueError):

@@ -12,18 +12,22 @@ import contextlib
 import logging
 import os
 import re
+import shlex
 import shutil
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from bot.config import Settings
 
 log = logging.getLogger(__name__)
 
 _PROGRESS_RE = re.compile(r"\[download\]\s+([\d.]+)%")
+
+_YT_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
 
 ProgressCallback = Callable[[float, int, int], Awaitable[None]]
 VoidCallback = Callable[[], Awaitable[None]]
@@ -91,13 +95,27 @@ class DownloadResult:
             self.height = int(info["height"])
 
 
+@dataclass
+class EgressProbe:
+    """Result of a live metadata-only probe used to validate network egress."""
+
+    ok: bool
+    detail: str
+
+
 class YtDlpRunner:
     """Runs the yt-dlp CLI as a killable subprocess."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def _extra_args(self, *, playlist: bool, playlist_items: str | None) -> list[str]:
+    def _extra_args(
+        self,
+        *,
+        playlist: bool,
+        playlist_items: str | None,
+        url: str | None = None,
+    ) -> list[str]:
         args = ["--no-warnings", "--no-colors", "--newline", "-q"]
         if playlist:
             args += ["--yes-playlist"]
@@ -109,7 +127,15 @@ class YtDlpRunner:
             args += ["--cookies", self.settings.cookies_file]
         if self.settings.proxy_url:
             args += ["--proxy", self.settings.proxy_url]
+        if self.settings.force_ipv4:
+            args += ["--force-ipv4"]
+        elif self.settings.force_ipv6 and _is_youtube_url(url):
+            args += ["--force-ipv6"]
+        runtime = detect_js_runtime(self.settings)
+        if runtime:
+            args += ["--js-runtimes", runtime]
         args += ["--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3"]
+        args += shlex.split(self.settings.ytdlp_extra_args or "")
         return args
 
     async def extract_info(
@@ -122,7 +148,7 @@ class YtDlpRunner:
             "yt_dlp",
             "-J",
             "--skip-download",
-            *self._extra_args(playlist=playlist, playlist_items=playlist_items),
+            *self._extra_args(playlist=playlist, playlist_items=playlist_items, url=url),
             url,
         ]
         proc = await asyncio.create_subprocess_exec(
@@ -211,7 +237,7 @@ class YtDlpRunner:
             sys.executable,
             "-m",
             "yt_dlp",
-            *self._extra_args(playlist=job.playlist, playlist_items=job.playlist_items),
+            *self._extra_args(playlist=job.playlist, playlist_items=job.playlist_items, url=job.url),
             "-o",
             outtmpl,
             "--merge-output-format",
@@ -255,7 +281,7 @@ class YtDlpRunner:
             sys.executable,
             "-m",
             "yt_dlp",
-            *self._extra_args(playlist=False, playlist_items=None),
+            *self._extra_args(playlist=False, playlist_items=None, url=job.url),
             "--skip-download",
             "--write-thumbnail",
             "--convert-thumbnails",
@@ -272,12 +298,132 @@ class YtDlpRunner:
             cand = job.tmpdir / f"{base}.{ext}"
             if cand.exists():
                 return cand
+        for ext in ("jpg", "png", "webp"):
+            cand = job.tmpdir / f"{base}.{ext}"
+            if cand.exists():
+                return cand
         return None
+
+    async def probe_egress(self, url: str | None = None) -> EgressProbe:
+        """Metadata-only yt-dlp call to check that the configured egress works.
+
+        Uses the same proxy / cookies / IP-family / JS-runtime options as a real
+        download, so a success here means downloads should succeed too.
+        """
+        target = (url or self.settings.egress_test_url or "").strip()
+        if not target:
+            return EgressProbe(ok=False, detail="no test url configured")
+        args = [
+            sys.executable,
+            "-m",
+            "yt_dlp",
+            *self._extra_args(playlist=False, playlist_items=None, url=target),
+            "--skip-download",
+            "--no-progress",
+            "--print",
+            "%(title)s",
+            target,
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+        except OSError as exc:
+            return EgressProbe(ok=False, detail=f"spawn failed: {exc}")
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate(), timeout=max(self.settings.info_timeout, 90)
+            )
+        except TimeoutError:
+            proc.kill()
+            with contextlib.suppress(OSError):
+                await proc.wait()
+            return EgressProbe(ok=False, detail="timeout")
+        if proc.returncode == 0:
+            lines = out.decode("utf-8", "replace").strip().splitlines()
+            return EgressProbe(ok=True, detail=(lines[0][:100] if lines else "ok"))
+        return EgressProbe(ok=False, detail=classify_egress_error(err.decode("utf-8", "replace")))
 
 
 # --------------------------------------------------------------------------
 # Pure helpers (unit-testable without the CLI)
 # --------------------------------------------------------------------------
+
+def _is_youtube_url(url: str | None) -> bool:
+    if not url:
+        return False
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return any(host == h or host.endswith("." + h) for h in _YT_HOSTS)
+
+
+def detect_js_runtime(settings: Settings) -> str | None:
+    """Pick the JS runtime for yt-dlp's extraction (``--js-runtimes``).
+
+    ``JS_RUNTIME=auto`` prefers Deno (yt-dlp's recommended runtime) and falls
+    back to Node. An explicit value is honoured if the binary is on PATH, or
+    passed through verbatim when it carries a ``name:path`` override.
+    """
+    requested = (getattr(settings, "js_runtime", "") or "").strip()
+    if requested and requested.lower() != "auto":
+        name = requested.split(":", 1)[0]
+        if ":" in requested or shutil.which(name):
+            return requested
+        return None
+    for name in ("deno", "node"):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def curl_cffi_version() -> str:
+    """Version of the optional ``curl_cffi`` TLS-impersonation backend, if any."""
+    try:
+        import curl_cffi
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(getattr(curl_cffi, "__version__", "installed"))
+
+
+def mask_proxy(url: str) -> str:
+    """Render a proxy URL for logs/telemetry with credentials removed."""
+    if not url:
+        return "off"
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "set"
+    if not parts.hostname:
+        return "set"
+    host = parts.hostname
+    if ":" in host:  # IPv6 literal
+        host = f"[{host}]"
+    netloc = host
+    if parts.port:
+        netloc += f":{parts.port}"
+    if parts.username or parts.password:
+        netloc = "***@" + netloc
+    return f"{parts.scheme}://{netloc}{parts.path or ''}"
+
+
+def classify_egress_error(text: str) -> str:
+    """Reduce a yt-dlp stderr blob to a short, actionable failure class."""
+    lowered = (text or "").lower()
+    if "sign in to confirm" in lowered or "not a bot" in lowered:
+        return "bot-wall (needs cookies or a different IP)"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "timeout"
+    if "no video formats" in lowered or "player response" in lowered:
+        return "no-formats"
+    if any(
+        k in lowered
+        for k in ("unable to download", "transporterror", "network", "connection", "resolve", "ssl")
+    ):
+        return "network"
+    return "error"
+
 
 def _parse_size(number: str, unit: str) -> int:
     unit = unit.replace("i", "").replace("I", "").upper()

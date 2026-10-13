@@ -104,7 +104,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "ffmpeg: {ffmpeg}\n"
             "Free disk: {disk}\n"
             "Queue: {queue_len} queued / {active} active\n"
-            "Mode: {mode}"
+            "Mode: {mode}\n"
+            "Proxy: {proxy}\n"
+            "Cookies: {cookies}\n"
+            "JS runtime: {js_runtime}\n"
+            "curl_cffi: {curl_cffi}\n"
+            "IP family: {ip_family}\n"
+            "Extra args: {extra_args}\n"
+            "Egress: {egress}"
         ),
         "inline_deeplink_title": "Download {title}",
         "inline_deeplink_desc": "Tap here to open the bot and choose a format.",
@@ -210,7 +217,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "ffmpeg: {ffmpeg}\n"
             "Freier Speicher: {disk}\n"
             "Warteschlange: {queue_len} wartend / {active} aktiv\n"
-            "Modus: {mode}"
+            "Modus: {mode}\n"
+            "Proxy: {proxy}\n"
+            "Cookies: {cookies}\n"
+            "JS runtime: {js_runtime}\n"
+            "curl_cffi: {curl_cffi}\n"
+            "IP family: {ip_family}\n"
+            "Extra args: {extra_args}\n"
+            "Egress: {egress}"
         ),
         "inline_deeplink_title": "{title} herunterladen",
         "inline_deeplink_desc": "Tippe hier, um den Bot zu öffnen und ein Format zu wählen.",
@@ -315,7 +329,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "ffmpeg: {ffmpeg}\n"
             "فضای آزاد: {disk}\n"
             "صف: {queue_len} در انتظار / {active} فعال\n"
-            "حالت: {mode}"
+            "حالت: {mode}\n"
+            "پروکسی: {proxy}\n"
+            "کوکی‌ها: {cookies}\n"
+            "JS runtime: {js_runtime}\n"
+            "curl_cffi: {curl_cffi}\n"
+            "IP family: {ip_family}\n"
+            "Extra args: {extra_args}\n"
+            "Egress: {egress}"
         ),
         "inline_deeplink_title": "دانلود {title}",
         "inline_deeplink_desc": "برای باز کردن ربات و انتخاب فرمت اینجا را لمس کنید.",

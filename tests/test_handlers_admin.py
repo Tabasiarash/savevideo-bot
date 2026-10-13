@@ -68,9 +68,33 @@ async def test_health(services, make_message, monkeypatch):
 
     monkeypatch.setattr(admin, "cli_version", fake_version)
     monkeypatch.setattr(admin, "_ffmpeg_version", lambda: "ffmpeg version test")
+    monkeypatch.setattr(admin, "detect_js_runtime", lambda s: "deno")
+    monkeypatch.setattr(admin, "curl_cffi_version", lambda: "0.13.0")
     msg = make_message(user_id=ADMIN)
     await admin.cmd_health(msg)
+    body = msg.sent[0]
     assert "yt-dlp" in msg.sent[0]
+    for expected in ("Proxy: off", "Cookies: none", "JS runtime: deno", "curl_cffi: 0.13.0", "Egress: ✅"):
+        assert expected in body
+
+
+async def test_health_masks_proxy_and_reports_failure(services, make_message, monkeypatch):
+    async def fake_version():
+        return "2026.01.01"
+
+    async def failing_probe(url=None):
+        return SimpleNamespace(ok=False, detail="bot-wall (needs cookies or a different IP)")
+
+    monkeypatch.setattr(admin, "cli_version", fake_version)
+    monkeypatch.setattr(admin, "_ffmpeg_version", lambda: "ffmpeg version test")
+    monkeypatch.setattr(admin.settings, "proxy_url", "socks5h://user:secret@100.64.0.5:1080")
+    monkeypatch.setattr(services.runner, "probe_egress", failing_probe)
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_health(msg)
+    body = msg.sent[0]
+    assert "secret" not in body
+    assert "***@100.64.0.5:1080" in body
+    assert "bot-wall" in body
 
 
 async def test_parse_user_id():

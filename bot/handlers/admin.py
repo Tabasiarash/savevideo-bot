@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from pathlib import Path
 
 from aiogram import Bot, Router
 from aiogram.filters import Command, CommandObject
@@ -15,7 +17,12 @@ from aiogram.types import Message
 from bot.config import settings
 from bot.deps import get_services
 from bot.handlers.common import text
-from bot.services.downloader import disk_free_bytes
+from bot.services.downloader import (
+    curl_cffi_version,
+    detect_js_runtime,
+    disk_free_bytes,
+    mask_proxy,
+)
 from bot.services.updater import cli_version
 from bot.utils import format_size
 
@@ -157,6 +164,8 @@ async def cmd_health(message: Message) -> None:
     ffmpeg = _ffmpeg_version()
     free = disk_free_bytes(settings.temp_dir_resolved)
     mode = "local" if settings.local_api else "cloud"
+    probe = await srv.runner.probe_egress(settings.egress_test_url)
+    egress = f"✅ {probe.detail}" if probe.ok else f"❌ {probe.detail}"
     await message.answer(
         text(
             "en",
@@ -167,8 +176,33 @@ async def cmd_health(message: Message) -> None:
             queue_len=srv.queue.waiting,
             active=srv.queue.active,
             mode=mode,
+            proxy=mask_proxy(settings.proxy_url),
+            cookies=_cookies_status(settings.cookies_file),
+            js_runtime=detect_js_runtime(settings) or "none",
+            curl_cffi=curl_cffi_version() or "not installed",
+            ip_family=_ip_family_label(),
+            extra_args=settings.ytdlp_extra_args or "none",
+            egress=egress,
         )
     )
+
+
+def _cookies_status(path: str) -> str:
+    if not path:
+        return "none"
+    p = Path(path)
+    if not p.exists():
+        return "missing"
+    days = (time.time() - p.stat().st_mtime) / 86400
+    return f"set ({days:.0f}d old)"
+
+
+def _ip_family_label() -> str:
+    if settings.force_ipv4:
+        return "IPv4 only"
+    if settings.force_ipv6:
+        return "IPv6 for YouTube"
+    return "auto"
 
 
 def _parse_user_id(arg: str | None) -> int | None:

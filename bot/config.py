@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # --- Anti-blocking ---
     cookies_file: str = ""
     proxy_url: str = ""
+    # Extra yt-dlp flags, shell-quoted, appended last (may override defaults).
+    ytdlp_extra_args: str = ""
+    # Force an IP family. IPv6 is only ever applied to YouTube URLs because a
+    # global `--force-ipv6` breaks IPv4-only sites (e.g. Vimeo).
+    force_ipv4: bool = False
+    force_ipv6: bool = False
+    # JavaScript runtime for yt-dlp's nsig/PO-token solving: "auto" (prefer deno
+    # then node), or an explicit value such as "deno", "node", "node:/usr/bin/node".
+    js_runtime: str = "auto"
+    # URL used by the admin /health command to probe the real download egress.
+    egress_test_url: str = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 
     # --- Storage ---
     db_path: str = "data/savevideo.db"

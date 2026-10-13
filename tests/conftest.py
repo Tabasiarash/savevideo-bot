@@ -109,6 +109,9 @@ class FakeRunner:
         path.write_bytes(b"\x00" * 128)
         return path
 
+    async def probe_egress(self, url=None):
+        return SimpleNamespace(ok=True, detail="Test Video")
+
 
 class FakeUpdater:
     def __init__(self) -> None:
@@ -211,6 +214,12 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setattr(real_settings, "default_language", "en", raising=False)
     monkeypatch.setattr(real_settings, "progress_edit_interval", 0.0, raising=False)
     monkeypatch.setattr(real_settings, "auto_update_ytdlp", False, raising=False)
+    monkeypatch.setattr(real_settings, "proxy_url", "", raising=False)
+    monkeypatch.setattr(real_settings, "cookies_file", "", raising=False)
+    monkeypatch.setattr(real_settings, "ytdlp_extra_args", "", raising=False)
+    monkeypatch.setattr(real_settings, "force_ipv4", False, raising=False)
+    monkeypatch.setattr(real_settings, "force_ipv6", False, raising=False)
+    monkeypatch.setattr(real_settings, "js_runtime", "auto", raising=False)
     (tmp_path / "tmp").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     return real_settings

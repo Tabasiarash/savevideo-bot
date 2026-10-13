@@ -111,7 +111,12 @@ option has a safe default and the bot degrades gracefully.
 | `AUTO_UPDATE_YTDLP` | `true` | Periodically `pip install -U yt-dlp`. |
 | `UPDATE_CHECK_HOURS` | `24` | Update interval. |
 | `COOKIES_FILE` | *(empty)* | Path to a Netscape `cookies.txt`. |
-| `PROXY_URL` | *(empty)* | Proxy for yt-dlp, e.g. `socks5://127.0.0.1:1080`. |
+| `PROXY_URL` | *(empty)* | Proxy for yt-dlp, e.g. `socks5h://user:pass@host:1080`. |
+| `YTDLP_EXTRA_ARGS` | *(empty)* | Extra yt-dlp CLI args, shell-quoted. |
+| `FORCE_IPV4` | `false` | Force IPv4 for every request. |
+| `FORCE_IPV6` | `false` | Force IPv6, **YouTube URLs only**. |
+| `JS_RUNTIME` | `auto` | JS engine for yt-dlp (`auto` = Deno→Node). |
+| `EGRESS_TEST_URL` | *(a YouTube video)* | URL probed by `/health`. |
 | `DB_PATH` | `data/savevideo.db` | SQLite database path. |
 | `TEMP_DIR` | `tmp` | Temporary download directory. |
 | `LOG_LEVEL` | `INFO` | Python logging level. |
@@ -140,15 +145,45 @@ The public Bot API limits uploads to 50 MB. To raise this to 2000 MB, run a
 ## Cookies / proxy for YouTube
 
 Many datacenter/VPS IPs get *“Sign in to confirm you're not a bot”* from
-YouTube. Options, in order of preference:
+YouTube. The bot recognises this and shows a helpful message (`youtube_signin`)
+instead of failing silently. **A different egress IP is the only reliable fix** —
+run `/health` in Telegram: its **Egress** line performs a live, metadata-only
+check through the configured proxy/cookies and reports `✅ <title>` or a failure
+class (`bot-wall`, `network`, `timeout`).
 
-1. **Cookies**: export a Netscape `cookies.txt` from a logged-in browser and
-   set `COOKIES_FILE=/absolute/path/cookies.txt`. With Docker, drop the file at
-   `./cookies/cookies.txt` and set `COOKIES_FILE=/cookies/cookies.txt`.
-2. **Proxy**: route yt-dlp through a residential/SOCKS proxy via `PROXY_URL`.
+Options, in order of preference:
 
-The bot tells you when this is the problem (see `youtube_signin` in the
-translations) instead of failing silently.
+1. **Home egress via Tailscale** (free, most reliable). On a machine on your home
+   network, install Tailscale and a SOCKS server, then point the VPS at it:
+   ```env
+   PROXY_URL=socks5h://user:pass@100.x.y.z:1080
+   ```
+   The VPS's systemd unit does not restrict address families, so the Tailscale
+   `100.64.0.0/10` range is reachable without changes. Do **not** set a full exit
+   node — only the bot's yt-dlp traffic should use this proxy.
+2. **Residential/mobile proxy** (paid, reliable). Must be *sticky* per job,
+   because googlevideo media URLs are bound to the extraction IP:
+   ```env
+   PROXY_URL=http://user:pass@gate.example.com:8000
+   ```
+3. **Cookies** (free, low reliability on a datacenter IP, account risk). Export a
+   logged-in `cookies.txt` and set `COOKIES_FILE=/absolute/path/cookies.txt`
+   (Docker: drop it at `./cookies/cookies.txt`, set `/cookies/cookies.txt`).
+4. **JS runtime** — yt-dlp uses a JS engine for YouTube's signature/PO-token
+   challenges. `JS_RUNTIME=auto` (default) prefers Deno then Node; the Docker
+   image ships Deno. Set `JS_RUNTIME=deno`/`node` or `node:/usr/bin/node` to pin.
+
+Verification tips (tested on a real datacenter VPS):
+
+- `FORCE_IPV6=true` is **not** a fix. It sometimes succeeds, but the successes are
+  per-video anomalies (e.g. the Rickroll works on *any* IP) and YouTube blocking
+  is unchanged. It is applied to YouTube URLs only, never globally — a global
+  IPv6 force breaks IPv4-only sites such as Vimeo.
+- Free tunnels (Cloudflare WARP) often **cannot** work on a VPS: the control
+  plane connects but the QUIC data plane is blocked by the provider. Confirm with
+  `/health` before relying on one.
+- `YTDLP_EXTRA_ARGS` lets you try extractor knobs without a code change, e.g.
+  `--extractor-args "youtube:player_client=web_safari"`.
 
 ## Admin commands
 
@@ -158,7 +193,7 @@ translations) instead of failing silently.
 | `/broadcast <text>` | Send a message to every active user. |
 | `/ban <user_id>` / `/unban <user_id>` | Block / unblock a user. |
 | `/update_ytdlp` | Update yt-dlp immediately. |
-| `/health` | yt-dlp & ffmpeg versions, free disk, queue, API mode. |
+| `/health` | Versions, disk, queue, proxy/cookies/JS-runtime/curl_cffi, and a live egress probe. |
 
 ## How it works
 

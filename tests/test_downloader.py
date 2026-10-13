@@ -2,22 +2,30 @@ from __future__ import annotations
 
 import pytest
 from bot.config import Settings
+from bot.services import downloader as dl
 from bot.services.downloader import (
     DownloadError,
     DownloadJob,
     YtDlpRunner,
     _collect_media_files,
+    _is_youtube_url,
     _parse_size,
     best_estimate,
+    classify_egress_error,
+    curl_cffi_version,
+    detect_js_runtime,
     disk_free_bytes,
     ensure_ffmpeg_available,
     estimate_format_size,
+    mask_proxy,
     video_quality_rows,
 )
 
 
-def _settings() -> Settings:
-    return Settings(_env_file=None, bot_token="x")
+def _settings(**kwargs) -> Settings:
+    base = {"_env_file": None, "bot_token": "x"}
+    base.update(kwargs)
+    return Settings(**base)
 
 
 def test_format_args_video():
@@ -122,3 +130,152 @@ def test_helpers_on_real_paths(tmp_path):
     assert disk_free_bytes(tmp_path) > 0
     job = DownloadJob(url="u", format_key="video_720", tmpdir=tmp_path)
     assert job.queue_position == 0
+
+
+# --------------------------------------------------------------------------
+# Anti-blocking argument construction
+# --------------------------------------------------------------------------
+
+def _no_js(monkeypatch):
+    monkeypatch.setattr(dl.shutil, "which", lambda name: None)
+
+
+def test_extra_args_defaults(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings())
+    args = runner._extra_args(playlist=False, playlist_items=None, url="https://x.example/v")
+    assert "--no-playlist" in args
+    assert "--force-ipv4" not in args
+    assert "--force-ipv6" not in args
+    assert "--js-runtimes" not in args
+
+
+def test_extra_args_adds_js_runtime_prefers_deno(monkeypatch):
+    monkeypatch.setattr(
+        dl.shutil, "which", lambda name: "/usr/local/bin/deno" if name == "deno" else None
+    )
+    runner = YtDlpRunner(_settings())
+    args = runner._extra_args(playlist=False, playlist_items=None)
+    assert args[args.index("--js-runtimes") + 1] == "deno"
+
+
+def test_extra_args_js_runtime_explicit_missing_skipped(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(js_runtime="deno"))
+    args = runner._extra_args(playlist=False, playlist_items=None)
+    assert "--js-runtimes" not in args
+
+
+def test_extra_args_splits_extra_args(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(ytdlp_extra_args="--cookies-from-browser firefox --compat-options here"))
+    args = runner._extra_args(playlist=False, playlist_items=None)
+    tail = args[args.index("--cookies-from-browser"):]
+    assert tail == ["--cookies-from-browser", "firefox", "--compat-options", "here"]
+
+
+def test_force_ipv4_global(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(force_ipv4=True))
+    args = runner._extra_args(playlist=False, playlist_items=None, url="https://vimeo.com/1")
+    assert "--force-ipv4" in args
+    assert "--force-ipv6" not in args
+
+
+def test_force_ipv6_only_for_youtube(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(force_ipv6=True))
+    yt = runner._extra_args(playlist=False, playlist_items=None, url="https://youtu.be/abc")
+    other = runner._extra_args(playlist=False, playlist_items=None, url="https://vimeo.com/1")
+    assert "--force-ipv6" in yt
+    assert "--force-ipv6" not in other
+
+
+def test_extra_args_ignores_missing_cookies(monkeypatch, tmp_path):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(cookies_file=str(tmp_path / "nope.txt")))
+    args = runner._extra_args(playlist=False, playlist_items=None)
+    assert "--cookies" not in args
+
+
+def test_is_youtube_url():
+    assert _is_youtube_url("https://youtu.be/x")
+    assert _is_youtube_url("https://www.youtube.com/watch?v=x")
+    assert _is_youtube_url("https://m.youtube.com/watch?v=x")
+    assert not _is_youtube_url("https://vimeo.com/1")
+    assert not _is_youtube_url("https://notyoutube.com/1")
+    assert not _is_youtube_url(None)
+
+
+def test_detect_js_runtime_auto_none(monkeypatch):
+    _no_js(monkeypatch)
+    assert detect_js_runtime(_settings()) is None
+
+
+def test_detect_js_runtime_explicit_path_passthrough(monkeypatch):
+    _no_js(monkeypatch)
+    assert detect_js_runtime(_settings(js_runtime="/custom/deno")) is None
+    assert detect_js_runtime(_settings(js_runtime="deno:/custom/deno")) == "deno:/custom/deno"
+
+
+def test_mask_proxy():
+    assert mask_proxy("") == "off"
+    assert mask_proxy("socks5h://user:secret@100.64.0.5:1080") == "socks5h://***@100.64.0.5:1080"
+    assert mask_proxy("http://1.2.3.4:8080") == "http://1.2.3.4:8080"
+    assert "secret" not in mask_proxy("http://u:secret@h.example:1")
+
+
+def test_curl_cffi_version_is_str():
+    assert isinstance(curl_cffi_version(), str)
+
+
+def test_classify_egress_error():
+    assert "bot-wall" in classify_egress_error("ERROR: Sign in to confirm you're not a bot")
+    assert classify_egress_error("operation timed out") == "timeout"
+    assert classify_egress_error("ERROR: Unable to download webpage") == "network"
+    assert classify_egress_error("no video formats found") == "no-formats"
+    assert classify_egress_error("something else") == "error"
+
+
+class _FakeProc:
+    def __init__(self, out: bytes = b"", err: bytes = b"", rc: int = 0) -> None:
+        self._out = out
+        self._err = err
+        self.returncode = rc
+
+    async def communicate(self):
+        return self._out, self._err
+
+    def kill(self):  # pragma: no cover
+        pass
+
+    async def wait(self):
+        return self.returncode
+
+
+async def test_probe_egress_ok(monkeypatch):
+    captured: dict[str, tuple] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc(out=b"Me at the zoo\n", rc=0)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    probe = await YtDlpRunner(_settings()).probe_egress("https://www.youtube.com/watch?v=x")
+    assert probe.ok and probe.detail == "Me at the zoo"
+    assert "--skip-download" in captured["args"]
+
+
+async def test_probe_egress_bot_wall(monkeypatch):
+    async def fake_exec(*args, **kwargs):
+        return _FakeProc(err=b"ERROR: Sign in to confirm you're not a bot", rc=1)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    probe = await YtDlpRunner(_settings()).probe_egress("https://www.youtube.com/watch?v=x")
+    assert not probe.ok
+    assert "bot-wall" in probe.detail
+
+
+async def test_probe_egress_no_url(monkeypatch):
+    probe = await YtDlpRunner(_settings(egress_test_url="")).probe_egress("")
+    assert not probe.ok
