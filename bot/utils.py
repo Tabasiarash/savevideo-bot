@@ -11,8 +11,8 @@ import ipaddress
 import logging
 import re
 import socket
+from collections.abc import Iterable
 from math import ceil
-from typing import Iterable
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 log = logging.getLogger(__name__)
@@ -125,13 +125,12 @@ def normalize_url(url: str) -> str:
 
     host = _canonical_host(host)
 
-    if host == "youtu.be" and port == "":
-        if path.startswith("/"):
-            vid = path[1:].split("?")[0].split("/")[0]
-            if vid:
-                host = "youtube.com"
-                path = "/watch"
-                query = f"v={vid}"
+    if host == "youtu.be" and port == "" and path.startswith("/"):
+        vid = path[1:].split("?")[0].split("/")[0]
+        if vid:
+            host = "youtube.com"
+            path = "/watch"
+            query = f"v={vid}"
 
     if port:
         default_port = "443" if scheme == "https" else "80"
@@ -229,10 +228,10 @@ async def check_url_safety(url: str) -> None:
     except ValueError:
         addresses = await resolve_host_addresses(host)
         if not addresses:
-            raise URLBlockedError(f"could not resolve host: {host!r}")
+            raise URLBlockedError(f"could not resolve host: {host!r}") from None
         for addr in addresses:
             if not ip_is_public(addr):
-                raise URLBlockedError(f"host {host!r} resolves to non-public address {addr!r}")
+                raise URLBlockedError(f"host {host!r} resolves to non-public address {addr!r}") from None
     else:
         if not addr.is_global:
             raise URLBlockedError(f"address is not public: {host!r}")

@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,7 +34,7 @@ class Settings(BaseSettings):
     bot_token: str = ""
 
     # --- Admins ---
-    admin_ids: list[int] = []
+    admin_ids: Annotated[list[int], NoDecode] = []
 
     # --- Upload limits ---
     max_mb: int = 50
@@ -84,6 +85,11 @@ class Settings(BaseSettings):
     @classmethod
     def split_admin_ids(cls, raw: object) -> list[int]:
         return _field_validator_helper(raw)
+
+    @field_validator("telegram_api_id", mode="before")
+    @classmethod
+    def blank_int_to_zero(cls, raw: object) -> object:
+        return 0 if raw in ("", None) else raw
 
     # ---- Derived helpers ---------------------------------------------------
 

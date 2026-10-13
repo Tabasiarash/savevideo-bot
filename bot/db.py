@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from typing import Any
 
 import aiosqlite
 
@@ -150,7 +151,7 @@ class Database:
                 last_seen = ?,
                 active = 1
             """,
-            (user_id, username, now, username, now),
+            (user_id, username, first_seen, now, username, now),
         )
 
     async def touch_user(self, user_id: int) -> None:
@@ -224,6 +225,12 @@ class Database:
         start = int(time.time()) - 24 * 3600
         assert self._conn is not None
         cur = await self._conn.execute("SELECT COUNT(*) AS c FROM downloads WHERE created_at >= ?", (start,))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def thumbnails_total(self) -> int:
+        assert self._conn is not None
+        cur = await self._conn.execute("SELECT COUNT(*) AS c FROM downloads WHERE format_key = 'thumbnail'")
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
 
