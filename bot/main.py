@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
@@ -36,6 +36,32 @@ def build_bot() -> Bot:
         log.info("using local Bot API at %s", settings.local_api_base)
         return Bot(token=settings.bot_token, session=session, default=defaults)
     return Bot(token=settings.bot_token, default=defaults)
+
+
+def build_dispatcher() -> Dispatcher:
+    """Wire routers in the exact order used in production.
+
+    Command routers (``start``, ``admin``) MUST come before ``links``: the
+    latter has a catch-all ``F.text`` handler that would otherwise swallow every
+    command and reply "Unknown command".
+    """
+    dp = Dispatcher()
+    dp.include_router(start.router)
+    dp.include_router(admin.router)
+    dp.include_router(links.router)
+    dp.include_router(inline.router)
+    return dp
+
+
+async def _set_commands(bot: Bot) -> None:
+    with contextlib.suppress(Exception):
+        await bot.set_my_commands(
+            [
+                types.BotCommand(command="start", description="Start / show help"),
+                types.BotCommand(command="help", description="How to use the bot"),
+                types.BotCommand(command="language", description="Change language"),
+            ]
+        )
 
 
 def sweep_stale_tmp(temp_dir: Path, max_age_s: int = 3600) -> None:
@@ -96,11 +122,8 @@ async def main() -> None:
     sweep_stale_tmp(settings.temp_dir_resolved)
     _log_environment()
 
-    dp = Dispatcher()
-    dp.include_router(links.router)
-    dp.include_router(start.router)
-    dp.include_router(inline.router)
-    dp.include_router(admin.router)
+    dp = build_dispatcher()
+    await _set_commands(bot)
 
     background_tasks = []
     if settings.auto_update_ytdlp:
