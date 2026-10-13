@@ -85,6 +85,12 @@ def test_upload_timeout_default():
     assert _settings().upload_timeout_seconds == 3600
 
 
+def test_fits_upload_limit_method():
+    s = _settings(max_mb=50)
+    assert s.fits_upload_limit(49 * 1024 * 1024) is True
+    assert s.fits_upload_limit(50 * 1024 * 1024) is False
+
+
 def test_js_runtime_env_aliases(monkeypatch):
     monkeypatch.delenv("JS_RUNTIME", raising=False)
     monkeypatch.setenv("YTDLP_JS_RUNTIME", "deno")

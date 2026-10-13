@@ -327,6 +327,21 @@ def target_bitrate_bps(size_limit_bytes: int, duration_s: float) -> int:
     return int(size_limit_bytes * 8 * 0.95 / duration_s)
 
 
+# Keep headroom below the Bot API limit: container/muxing overhead and the gap
+# between estimated and actual sizes mean a file at exactly the limit can still
+# be rejected by Telegram.
+UPLOAD_SAFETY_MARGIN = 0.02
+
+
+def fits_upload_limit(size_bytes: int, limit_bytes: int) -> bool:
+    """True when ``size_bytes`` fits ``limit_bytes`` with a small safety margin."""
+    if size_bytes <= 0:
+        return True
+    if limit_bytes <= 0:
+        return False
+    return size_bytes <= int(limit_bytes * (1 - UPLOAD_SAFETY_MARGIN))
+
+
 def iter_hosts(urls: Iterable[str]) -> str:
     """Join the canonical hosts of several URLs for logging."""
     return ", ".join(hostname_from_url(u) for u in urls)

@@ -290,6 +290,9 @@ class YtDlpRunner:
             "--merge-output-format",
             "mp4",
         ]
+        if job.format_key.startswith("video"):
+            # Put the moov atom first so uploads/seeking are efficient.
+            args += ["--postprocessor-args", "Merger:-movflags +faststart"]
         args += self._format_args(job.format_key, job.height, job.audio_codec)
         if write_thumbnail:
             args += ["--write-thumbnail", "--convert-thumbnails", "jpg"]
@@ -625,6 +628,58 @@ async def probe_duration(path: Path) -> float:
     return await asyncio.to_thread(_run)
 
 
+@dataclass(frozen=True)
+class MediaInfo:
+    """Duration / dimensions read back from a produced file via ffprobe."""
+
+    duration: float = 0.0
+    width: int | None = None
+    height: int | None = None
+
+
+async def probe_media(path: Path) -> MediaInfo:
+    """Best-effort duration/width/height of ``path`` via ffprobe (off-loop).
+
+    Used to tag uploads with the real metadata of the produced file rather than
+    the (possibly different) requested format.
+    """
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return MediaInfo()
+    import json
+    import subprocess
+
+    def _run() -> MediaInfo:
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height:format=duration",
+                    "-of", "json", str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            data = json.loads(result.stdout or "{}")
+        except (ValueError, subprocess.SubprocessError, OSError):
+            return MediaInfo()
+        stream = (data.get("streams") or [{}])[0]
+        try:
+            duration = float((data.get("format") or {}).get("duration") or 0.0)
+        except (TypeError, ValueError):
+            duration = 0.0
+        width = stream.get("width")
+        height = stream.get("height")
+        return MediaInfo(
+            duration=duration,
+            width=int(width) if width else None,
+            height=int(height) if height else None,
+        )
+
+    return await asyncio.to_thread(_run)
+
+
 def ensure_ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
@@ -653,6 +708,7 @@ class FormatOption:
     label: str
     size_bytes: int | None = None
     height: int | None = None
+    too_large: bool = False
 
 
 def _option_size(info: dict[str, Any], fmt: dict[str, Any]) -> int | None:
@@ -713,13 +769,16 @@ def video_quality_rows(
     info: dict[str, Any],
     prefix: str = "dl",
     max_heights: int = 6,
+    limit_bytes: int | None = None,
 ) -> list[list[FormatOption]]:
     """Build rows of video quality buttons from a real yt-dlp info dict.
 
     Heights are gathered from actual formats, deduplicated, capped at
-    ``max_heights`` (spread evenly), followed by a "Best" entry.
+    ``max_heights`` (spread evenly), followed by a "Best" entry. When
+    ``limit_bytes`` is given, options whose estimate exceeds the limit are
+    flagged as ``too_large`` so the caller can mark them.
     """
-    from bot.utils import format_size
+    from bot.utils import fits_upload_limit, format_size
 
     heights = sorted(
         {
@@ -741,17 +800,39 @@ def video_quality_rows(
             picked = [heights[0]] + picked[:-1]
     picked = sorted(set(picked), reverse=True)
 
+    def _too_large(size: int | None) -> bool:
+        return bool(size and limit_bytes and not fits_upload_limit(size, limit_bytes))
+
     rows: list[list[FormatOption]] = []
     for h in picked:
         size = estimate_format_size(info, h)
         label = f"{h}p"
         if size:
             label += f" · {format_size(size)}"
-        rows.append([FormatOption(key=f"{prefix}:video_{h}", label=label, size_bytes=size, height=h)])
+        rows.append(
+            [
+                FormatOption(
+                    key=f"{prefix}:video_{h}",
+                    label=label,
+                    size_bytes=size,
+                    height=h,
+                    too_large=_too_large(size),
+                )
+            ]
+        )
 
     best_size = best_estimate(info)
     best_label = "Best"
     if best_size:
         best_label += f" · {format_size(best_size)}"
-    rows.append([FormatOption(key=f"{prefix}:video_best", label=best_label, size_bytes=best_size)])
+    rows.append(
+        [
+            FormatOption(
+                key=f"{prefix}:video_best",
+                label=best_label,
+                size_bytes=best_size,
+                too_large=_too_large(best_size),
+            )
+        ]
+    )
     return rows

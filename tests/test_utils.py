@@ -6,6 +6,7 @@ from bot.utils import (
     URLParseError,
     check_url_safety,
     extract_urls,
+    fits_upload_limit,
     format_duration,
     format_size,
     hostname_from_url,
@@ -145,3 +146,11 @@ def test_target_bitrate_bps():
     assert target_bitrate_bps(0, 10) == 0
     assert target_bitrate_bps(1000, 0) == 0
     assert target_bitrate_bps(8_000_000, 8) == int(8_000_000 * 8 * 0.95 / 8)
+
+
+def test_fits_upload_limit_applies_margin():
+    limit = 100 * 1024 * 1024
+    assert fits_upload_limit(98 * 1024 * 1024, limit) is True
+    assert fits_upload_limit(99 * 1024 * 1024, limit) is False
+    assert fits_upload_limit(0, limit) is True
+    assert fits_upload_limit(10, 0) is False

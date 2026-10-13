@@ -118,6 +118,40 @@ def test_video_quality_rows_without_video_formats():
     assert video_quality_rows({"formats": [{"height": None, "vcodec": "none"}]}) == []
 
 
+def test_video_quality_rows_marks_too_large():
+    rows = video_quality_rows(INFO, prefix="dl", limit_bytes=15 * 1024 * 1024)
+    by_key = {opts[0].key: opts[0] for opts in rows}
+    assert by_key["dl:video_480"].too_large is False  # ~12 MB
+    assert by_key["dl:video_720"].too_large is True  # ~22 MB
+    assert by_key["dl:video_best"].too_large is True  # ~42 MB
+
+
+async def test_download_adds_faststart_for_video(monkeypatch, tmp_path):
+    captured: dict[str, list[str]] = {}
+    runner = YtDlpRunner(_settings())
+
+    async def fake_run(args, **kwargs):
+        captured["args"] = args
+
+    monkeypatch.setattr(runner, "_run_and_read_progress", fake_run)
+    job = DownloadJob(url="https://youtu.be/x", format_key="video_720", tmpdir=tmp_path, height=720)
+    await runner.download(job)
+    assert "Merger:-movflags +faststart" in captured["args"]
+
+
+async def test_download_omits_faststart_for_audio(monkeypatch, tmp_path):
+    captured: dict[str, list[str]] = {}
+    runner = YtDlpRunner(_settings())
+
+    async def fake_run(args, **kwargs):
+        captured["args"] = args
+
+    monkeypatch.setattr(runner, "_run_and_read_progress", fake_run)
+    job = DownloadJob(url="https://youtu.be/x", format_key="audio_mp3", tmpdir=tmp_path)
+    await runner.download(job)
+    assert "Merger:-movflags +faststart" not in captured["args"]
+
+
 def test_estimate_format_size_picks_height():
     assert estimate_format_size(INFO, 480) == 12_000_000
     assert estimate_format_size(INFO, 99999) is None

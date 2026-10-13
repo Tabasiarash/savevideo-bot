@@ -37,7 +37,10 @@ from bot.services.downloader import (
     DownloadJob,
     InfoError,
     YtDlpError,
+    best_estimate,
     cleanup_dir,
+    estimate_format_size,
+    probe_media,
     transcode_audio_to_size,
     transcode_to_size,
     video_quality_rows,
@@ -289,10 +292,38 @@ async def _send_thumbnail(callback: CallbackQuery, bot: Bot, flow: PendingFlow, 
 # Download orchestration
 # --------------------------------------------------------------------------
 
+def _estimate_selected(flow: PendingFlow, fmt: str) -> int | None:
+    """Estimated download size for the chosen format, when it can be known."""
+    if fmt == "video_best":
+        return best_estimate(flow.info)
+    if fmt.startswith("video_"):
+        height = _height_of(fmt)
+        return estimate_format_size(flow.info, height) if height else None
+    return None
+
+
 async def _run_download(callback: CallbackQuery, bot: Bot, flow: PendingFlow, fmt: str) -> None:
     srv = get_services()
     user_id = callback.from_user.id
     lang = flow.lang
+
+    estimate = _estimate_selected(flow, fmt)
+    if estimate is not None and not settings.fits_upload_limit(estimate):
+        await _edit(
+            message=flow.status_message,
+            body=text(
+                lang,
+                "too_large_estimate",
+                size=format_size(estimate),
+                limit=settings.max_mb,
+            ),
+        )
+        await _record(
+            srv.db, user_id, flow.url, flow.url_site, fmt, "error", "too_large", estimate, flow.duration
+        )
+        _cleanup_pending(flow)
+        cleanup_dir(flow.tmpdir)
+        return
 
     if not await srv.ratelimiter.start_job(user_id):
         await callback.answer(text(lang, "active_job"), show_alert=True)
@@ -462,12 +493,13 @@ async def _upload_video_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path]
     for index, path in enumerate(parts, start=1):
         if len(parts) > 1:
             await _edit(message=flow.status_message, body=text(lang, "sending_part", part=index, total=len(parts)))
+        media = await probe_media(path)
         thumb = _find_thumbnail(flow.tmpdir)
         kwargs: dict[str, Any] = {
             "supports_streaming": True,
-            "width": _width_of(flow),
-            "height": _height_of(fmt),
-            "duration": int(flow.duration) if flow.duration else None,
+            "width": media.width or _width_of(flow),
+            "height": media.height or _height_of(fmt),
+            "duration": int(media.duration or flow.duration) or None,
         }
         if thumb:
             kwargs["thumbnail"] = FSInputFile(thumb)
@@ -492,12 +524,13 @@ async def _upload_audio_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path]
     for index, path in enumerate(parts, start=1):
         if len(parts) > 1:
             await _edit(message=flow.status_message, body=text(lang, "sending_part", part=index, total=len(parts)))
+        media = await probe_media(path)
         sent = await bot.send_audio(
             chat_id,
             FSInputFile(path),
             title=sanitize_filename(flow.title) or None,
             performer=sanitize_filename(flow.uploader) or None,
-            duration=int(flow.duration) if flow.duration else None,
+            duration=int(media.duration or flow.duration) or None,
         )
         size = path.stat().st_size
         if len(parts) == 1:
@@ -708,8 +741,19 @@ def _choose_text(flow: PendingFlow) -> str:
 
 def _build_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for quality_row in video_quality_rows(flow.info, prefix=flow.prefix):
-        rows.append([InlineKeyboardButton(text=option.label, callback_data=option.key) for option in quality_row])
+    marker = text(flow.lang, "too_large_marker")
+    for quality_row in video_quality_rows(
+        flow.info, prefix=flow.prefix, limit_bytes=settings.upload_limit_bytes
+    ):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=option.label + (marker if option.too_large else ""),
+                    callback_data=option.key,
+                )
+                for option in quality_row
+            ]
+        )
     rows.append(
         [
             InlineKeyboardButton(text=text(flow.lang, "button_audio_mp3"), callback_data=f"{flow.prefix}:audio_mp3"),

@@ -13,6 +13,8 @@ from typing import Annotated
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from bot.utils import fits_upload_limit as _fits_upload_limit
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Telegram's local Bot API server refuses uploads larger than 2000 MB.
@@ -161,6 +163,10 @@ class Settings(BaseSettings):
     @property
     def upload_limit_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    def fits_upload_limit(self, size_bytes: int) -> bool:
+        """True when ``size_bytes`` fits under the configured limit (2% margin)."""
+        return _fits_upload_limit(size_bytes, self.upload_limit_bytes)
 
     @property
     def cache_ttl_s(self) -> int:

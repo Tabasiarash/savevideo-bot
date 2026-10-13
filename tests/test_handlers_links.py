@@ -243,6 +243,31 @@ async def test_size_fallback_impossible_gives_error(services, runner, make_messa
     assert any("cannot be made to fit" in e for e in msg.edits)
 
 
+async def test_oversized_estimate_is_rejected_before_download(
+    services, runner, bot, make_message, make_callback
+):
+    msg = make_message()
+    runner.info["formats"] = [
+        {"height": 1080, "vcodec": "avc1", "acodec": "none", "filesize": 500_000_000},
+        {"height": None, "vcodec": "none", "acodec": "mp4a", "filesize": 2_000_000},
+    ]
+    await links.handle_urls(msg, ["https://www.youtube.com/watch?v=abc123"], playlist=False)
+    cb = make_callback(data="dl:video_best", message=msg)
+    await links.on_format_pick(cb, bot)
+    assert runner.calls == []
+    assert USER not in links._pending
+    assert any("upload limit" in e for e in msg.edits)
+
+
+async def test_fitting_estimate_still_downloads(services, runner, bot, make_message, make_callback):
+    msg = make_message()
+    runner.media_size = 1024
+    await links.handle_urls(msg, ["https://www.youtube.com/watch?v=abc123"], playlist=False)
+    cb = make_callback(data="dl:video_480", message=msg)
+    await links.on_format_pick(cb, bot)
+    assert len(runner.calls) == 1
+
+
 async def test_audio_oversize_without_split_gives_error(services, runner, make_message, monkeypatch):
     msg = make_message()
     flow = await _open_flow(services, msg, runner)
