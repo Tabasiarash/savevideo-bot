@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -115,6 +116,7 @@ class YtDlpRunner:
         playlist: bool,
         playlist_items: str | None,
         url: str | None = None,
+        cookiejar_dir: Path | None = None,
     ) -> list[str]:
         args = ["--no-warnings", "--no-colors", "--newline", "-q"]
         if playlist:
@@ -123,8 +125,7 @@ class YtDlpRunner:
                 args += ["--playlist-items", playlist_items]
         else:
             args += ["--no-playlist"]
-        if self.settings.cookies_file and Path(self.settings.cookies_file).exists():
-            args += ["--cookies", self.settings.cookies_file]
+        args += self._cookie_args(cookiejar_dir)
         if self.settings.proxy_url:
             args += ["--proxy", self.settings.proxy_url]
         if self.settings.force_ipv4:
@@ -138,8 +139,47 @@ class YtDlpRunner:
         args += shlex.split(self.settings.ytdlp_extra_args or "")
         return args
 
+    def _cookie_args(self, cookiejar_dir: Path | None) -> list[str]:
+        """``--cookies`` args, staged into a writable dir when one is given.
+
+        yt-dlp rewrites the cookie file on exit, so the configured file must be
+        writable by the service — but it may live somewhere read-only (e.g.
+        ``/etc`` under ``ProtectSystem=full``) and shared across jobs. When a
+        ``cookiejar_dir`` is available the cookies are copied into a private
+        ``.cookies/`` subdirectory (never mistaken for media) for the run.
+        """
+        source = self.settings.cookies_file
+        if not source or not Path(source).exists():
+            return []
+        dest = Path(source)
+        if cookiejar_dir is not None:
+            try:
+                staged = Path(cookiejar_dir) / ".cookies"
+                staged.mkdir(parents=True, exist_ok=True)
+                dest = staged / "cookies.txt"
+                shutil.copyfile(source, dest)
+                os.chmod(dest, 0o600)
+            except OSError:
+                log.warning("could not stage cookies, using source file", exc_info=True)
+                dest = Path(source)
+        return ["--cookies", str(dest)]
+
+    def _make_cookiejar_dir(self) -> Path | None:
+        """Scratch dir for cookie staging when a command has no job tmpdir."""
+        try:
+            base = Path(self.settings.temp_dir_resolved)
+            base.mkdir(parents=True, exist_ok=True)
+            return Path(tempfile.mkdtemp(dir=base, prefix="cookiejar-"))
+        except OSError:
+            return None
+
     async def extract_info(
-        self, url: str, *, playlist: bool = False, playlist_items: str | None = None
+        self,
+        url: str,
+        *,
+        playlist: bool = False,
+        playlist_items: str | None = None,
+        cookiejar_dir: Path | None = None,
     ) -> dict[str, Any]:
         """Extract metadata as a dict (``yt-dlp -J``). Raises :class:`InfoError`."""
         args = [
@@ -148,7 +188,9 @@ class YtDlpRunner:
             "yt_dlp",
             "-J",
             "--skip-download",
-            *self._extra_args(playlist=playlist, playlist_items=playlist_items, url=url),
+            *self._extra_args(
+                playlist=playlist, playlist_items=playlist_items, url=url, cookiejar_dir=cookiejar_dir
+            ),
             url,
         ]
         proc = await asyncio.create_subprocess_exec(
@@ -237,7 +279,12 @@ class YtDlpRunner:
             sys.executable,
             "-m",
             "yt_dlp",
-            *self._extra_args(playlist=job.playlist, playlist_items=job.playlist_items, url=job.url),
+            *self._extra_args(
+                playlist=job.playlist,
+                playlist_items=job.playlist_items,
+                url=job.url,
+                cookiejar_dir=job.tmpdir,
+            ),
             "-o",
             outtmpl,
             "--merge-output-format",
@@ -281,7 +328,9 @@ class YtDlpRunner:
             sys.executable,
             "-m",
             "yt_dlp",
-            *self._extra_args(playlist=False, playlist_items=None, url=job.url),
+            *self._extra_args(
+                playlist=False, playlist_items=None, url=job.url, cookiejar_dir=job.tmpdir
+            ),
             "--skip-download",
             "--write-thumbnail",
             "--convert-thumbnails",
@@ -313,17 +362,27 @@ class YtDlpRunner:
         target = (url or self.settings.egress_test_url or "").strip()
         if not target:
             return EgressProbe(ok=False, detail="no test url configured")
-        args = [
-            sys.executable,
-            "-m",
-            "yt_dlp",
-            *self._extra_args(playlist=False, playlist_items=None, url=target),
-            "--skip-download",
-            "--no-progress",
-            "--print",
-            "%(title)s",
-            target,
-        ]
+        staged_dir = self._make_cookiejar_dir()
+        try:
+            args = [
+                sys.executable,
+                "-m",
+                "yt_dlp",
+                *self._extra_args(
+                    playlist=False, playlist_items=None, url=target, cookiejar_dir=staged_dir
+                ),
+                "--skip-download",
+                "--no-progress",
+                "--print",
+                "%(title)s",
+                target,
+            ]
+            return await self._run_probe(args)
+        finally:
+            if staged_dir is not None:
+                shutil.rmtree(staged_dir, ignore_errors=True)
+
+    async def _run_probe(self, args: list[str]) -> EgressProbe:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE

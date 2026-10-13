@@ -167,7 +167,7 @@ async def handle_urls(message: Message, urls: list[str], playlist: bool) -> None
     status_message = await message.answer(text(lang, "url_fetching"))
 
     try:
-        info = await _extract(srv, url, playlist=playlist)
+        info = await _extract(srv, url, playlist=playlist, tmpdir=tmpdir)
     except InfoError as exc:
         await _on_info_error(status_message, lang, user.id, url, exc)
         cleanup_dir(tmpdir)
@@ -592,16 +592,20 @@ def _supported(raw: str) -> bool:
     return is_supported_scheme(raw)
 
 
-async def _extract(srv, url: str, playlist: bool) -> dict[str, Any] | None:
+async def _extract(srv, url: str, playlist: bool, tmpdir: Path) -> dict[str, Any] | None:
     items = "1-10" if playlist else None
     try:
-        return await srv.runner.extract_info(url, playlist=playlist, playlist_items=items)
+        return await srv.runner.extract_info(
+            url, playlist=playlist, playlist_items=items, cookiejar_dir=tmpdir
+        )
     except InfoError as exc:
         if srv.updater.should_retry(str(exc)):
             log.info("info extraction failed (%s); updating yt-dlp and retrying", exc)
             result = await srv.updater.update()
             if result.ok:
-                return await srv.runner.extract_info(url, playlist=playlist, playlist_items=items)
+                return await srv.runner.extract_info(
+                    url, playlist=playlist, playlist_items=items, cookiejar_dir=tmpdir
+                )
         raise
 
 

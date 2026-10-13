@@ -79,7 +79,7 @@ class FakeRunner:
         self.info_calls: list[str] = []
         self.thumb_error = False
 
-    async def extract_info(self, url, *, playlist=False, playlist_items=None):
+    async def extract_info(self, url, *, playlist=False, playlist_items=None, cookiejar_dir=None):
         self.info_calls.append(url)
         if self.info_error:
             raise self.info_error

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from bot.config import Settings
 from bot.services import downloader as dl
@@ -196,6 +198,33 @@ def test_extra_args_ignores_missing_cookies(monkeypatch, tmp_path):
     runner = YtDlpRunner(_settings(cookies_file=str(tmp_path / "nope.txt")))
     args = runner._extra_args(playlist=False, playlist_items=None)
     assert "--cookies" not in args
+
+
+def test_extra_args_stages_cookies_into_private_subdir(monkeypatch, tmp_path):
+    _no_js(monkeypatch)
+    source = tmp_path / "master_cookies.txt"
+    source.write_text("# Netscape HTTP Cookie File\n")
+    runner = YtDlpRunner(_settings(cookies_file=str(source)))
+    jobdir = tmp_path / "job"
+    jobdir.mkdir()
+
+    args = runner._extra_args(playlist=False, playlist_items=None, cookiejar_dir=jobdir)
+
+    staged = Path(args[args.index("--cookies") + 1])
+    assert staged != source
+    assert staged.parent.name == ".cookies"
+    assert staged.read_text() == source.read_text()
+    # The staged copy must not look like downloadable media.
+    assert staged.suffix == ".txt"
+
+
+def test_extra_args_cookies_without_dir_uses_source(monkeypatch, tmp_path):
+    _no_js(monkeypatch)
+    source = tmp_path / "master_cookies.txt"
+    source.write_text("# Netscape HTTP Cookie File\n")
+    runner = YtDlpRunner(_settings(cookies_file=str(source)))
+    args = runner._extra_args(playlist=False, playlist_items=None)
+    assert args[args.index("--cookies") + 1] == str(source)
 
 
 def test_is_youtube_url():

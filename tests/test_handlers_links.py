@@ -323,10 +323,10 @@ async def test_deeplink_valid_starts_flow(services, runner, bot, make_message):
     assert await services.db.deeplink_get("tok") is None
 
 
-async def test_extract_retries_after_ytdlp_update(services, runner, monkeypatch):
+async def test_extract_retries_after_ytdlp_update(services, runner, monkeypatch, tmp_path):
     calls = {"n": 0}
 
-    async def fake_extract(url, *, playlist=False, playlist_items=None):
+    async def fake_extract(url, *, playlist=False, playlist_items=None, cookiejar_dir=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise InfoError("extractor broke")
@@ -334,7 +334,7 @@ async def test_extract_retries_after_ytdlp_update(services, runner, monkeypatch)
 
     monkeypatch.setattr(runner, "extract_info", fake_extract)
     services.updater.retry = True
-    result = await links._extract(services, "https://youtube.com/watch?v=x", False)
+    result = await links._extract(services, "https://youtube.com/watch?v=x", False, tmp_path)
     assert result == runner.info
     assert calls["n"] == 2
     assert services.updater.updates == 1
