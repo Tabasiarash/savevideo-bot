@@ -17,6 +17,8 @@ cookies.txt
 # Runtime data
 data/
 tmp/
+cookies/*
+!cookies/.gitkeep
 *.db
 *.sqlite3
 

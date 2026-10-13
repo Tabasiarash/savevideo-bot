@@ -54,8 +54,7 @@ def sweep_stale_tmp(temp_dir: Path, max_age_s: int = 3600) -> None:
                 continue
 
 
-async def _maintenance_loop() -> None:
-    srv = init_services(settings)
+async def _maintenance_loop(srv) -> None:
     while True:
         await asyncio.sleep(6 * 3600)
         try:
@@ -106,7 +105,7 @@ async def main() -> None:
     background_tasks = []
     if settings.auto_update_ytdlp:
         background_tasks.append(asyncio.create_task(auto_update_loop(srv)))
-    background_tasks.append(asyncio.create_task(_maintenance_loop()))
+    background_tasks.append(asyncio.create_task(_maintenance_loop(srv)))
 
     try:
         await dp.start_polling(
@@ -117,7 +116,7 @@ async def main() -> None:
         for task in background_tasks:
             task.cancel()
         for task in background_tasks:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await task
         await bot.session.close()
         await srv.db.close()

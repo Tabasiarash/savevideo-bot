@@ -98,7 +98,7 @@ class YtDlpRunner:
         self.settings = settings
 
     def _extra_args(self, *, playlist: bool, playlist_items: str | None) -> list[str]:
-        args = ["--no-call-home", "--no-warnings", "--no-colors", "--newline", "-q"]
+        args = ["--no-warnings", "--no-colors", "--newline", "-q"]
         if playlist:
             args += ["--yes-playlist"]
             if playlist_items:
