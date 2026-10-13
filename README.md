@@ -142,47 +142,68 @@ The public Bot API limits uploads to 50 MB. To raise this to 2000 MB, run a
 > `https://api.telegram.org/bot<token>/logOut`. Cloud and local servers cannot
 > be used at the same time.
 
-## Cookies / proxy for YouTube
+## YouTube: "Sign in to confirm you're not a bot"
 
-Many datacenter/VPS IPs get *“Sign in to confirm you're not a bot”* from
-YouTube. The bot recognises this and shows a helpful message (`youtube_signin`)
-instead of failing silently. **A different egress IP is the only reliable fix** —
-run `/health` in Telegram: its **Egress** line performs a live, metadata-only
-check through the configured proxy/cookies and reports `✅ <title>` or a failure
-class (`bot-wall`, `network`, `timeout`).
+Datacenter/VPS IPs are commonly walled by YouTube. The bot recognises the wall
+and shows the `youtube_signin` hint instead of failing silently. To verify the
+current setup, run `/health` in Telegram: its **Egress** line performs a live,
+metadata-only yt-dlp call through the configured cookies/proxy and reports
+`✅ <title>` or a failure class (`bot-wall`, `network`, `timeout`, `no-formats`).
 
-Options, in order of preference:
+### Works on a datacenter IP (free): cookies + PO-token provider + JS runtime
 
-1. **Home egress via Tailscale** (free, most reliable). On a machine on your home
-   network, install Tailscale and a SOCKS server, then point the VPS at it:
+Three ingredients, all present in this repo, clear the wall with no paid proxy:
+
+1. **Fresh cookies** from a logged-in Google/YouTube session in `COOKIES_FILE`
+   (`/etc/savevideo-bot/yt_cookies.txt` on the systemd host, mounted
+   `./cookies/cookies.txt` in Docker). Export them from a browser with:
+   ```bash
+   # systemd host (needs the keyring / DBUS session that owns the Chrome profile)
+   scripts/refresh_cookies.py --profile-dir ~/.config/google-chrome/Default \
+       --output /etc/savevideo-bot/yt_cookies.txt
+   ```
+2. **PO-token provider** — the `bgutil-ytdlp-pot-provider` plugin is a pinned
+   dependency; the token *server* runs next to the bot:
+   ```bash
+   scripts/run-pot-provider.sh          # docker, listens on 127.0.0.1:4416
+   ```
+   docker-compose brings up the same server as the `bgutil` service and points
+   the bot at it via `YTDLP_EXTRA_ARGS`. **Keep the plugin and server versions
+   equal** (both currently `2.0.2`).
+3. **JS runtime** — yt-dlp needs a JS engine to solve YouTube's `n`/signature
+   challenge. `JS_RUNTIME=auto` (default) prefers Deno then Node; the Docker
+   image ships Deno. Pin with `JS_RUNTIME=node` or `node:/usr/bin/node`.
+
+All three are required: the provider alone still hits the wall, and cookies alone
+return `Sign in…`. Cookies expire and automating an account carries some risk —
+refresh them when `/health` regresses to `bot-wall`.
+
+### Alternative: a non-datacenter egress
+
+1. **Home egress via Tailscale** (free). On a machine on your home network run a
+   SOCKS server, then point the VPS at it:
    ```env
    PROXY_URL=socks5h://user:pass@100.x.y.z:1080
    ```
-   The VPS's systemd unit does not restrict address families, so the Tailscale
-   `100.64.0.0/10` range is reachable without changes. Do **not** set a full exit
-   node — only the bot's yt-dlp traffic should use this proxy.
-2. **Residential/mobile proxy** (paid, reliable). Must be *sticky* per job,
-   because googlevideo media URLs are bound to the extraction IP:
+   The VPS systemd unit does not restrict address families, so `100.64.0.0/10`
+   is reachable as-is. Do **not** set a full exit node — only the bot's yt-dlp
+   traffic should use this proxy.
+2. **Residential/mobile proxy** (paid). Must be *sticky* per job, because
+   googlevideo media URLs are bound to the extraction IP:
    ```env
    PROXY_URL=http://user:pass@gate.example.com:8000
    ```
-3. **Cookies** (free, low reliability on a datacenter IP, account risk). Export a
-   logged-in `cookies.txt` and set `COOKIES_FILE=/absolute/path/cookies.txt`
-   (Docker: drop it at `./cookies/cookies.txt`, set `/cookies/cookies.txt`).
-4. **JS runtime** — yt-dlp uses a JS engine for YouTube's signature/PO-token
-   challenges. `JS_RUNTIME=auto` (default) prefers Deno then Node; the Docker
-   image ships Deno. Set `JS_RUNTIME=deno`/`node` or `node:/usr/bin/node` to pin.
 
-Verification tips (tested on a real datacenter VPS):
+### Notes (tested on a real datacenter VPS)
 
-- `FORCE_IPV6=true` is **not** a fix. It sometimes succeeds, but the successes are
-  per-video anomalies (e.g. the Rickroll works on *any* IP) and YouTube blocking
-  is unchanged. It is applied to YouTube URLs only, never globally — a global
-  IPv6 force breaks IPv4-only sites such as Vimeo.
+- `FORCE_IPV6=true` is **not** a fix. Occasional successes are per-video
+  anomalies (e.g. the Rickroll works on *any* IP). Applied to YouTube URLs only,
+   never globally — a global IPv6 force breaks IPv4-only sites such as Vimeo.
+- `--impersonate` (curl_cffi) and alternate `player_client`s do not defeat the
+   wall on a flagged IP.
 - Free tunnels (Cloudflare WARP) often **cannot** work on a VPS: the control
-  plane connects but the QUIC data plane is blocked by the provider. Confirm with
-  `/health` before relying on one.
-- `YTDLP_EXTRA_ARGS` lets you try extractor knobs without a code change, e.g.
+  plane connects but the QUIC data plane is blocked. Confirm with `/health`.
+- `YTDLP_EXTRA_ARGS` adds extractor knobs without code changes, e.g.
   `--extractor-args "youtube:player_client=web_safari"`.
 
 ## Admin commands

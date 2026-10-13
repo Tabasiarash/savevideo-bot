@@ -2,6 +2,11 @@
 aiogram>=3.13,<4
 aiosqlite>=0.20,<1
 yt-dlp[default,curl-cffi]>=2024.1.1
+# PO-token provider plugin. Pairs with a running bgutil provider server
+# (docker image brainicism/bgutil-ytdlp-pot-provider) and a JS runtime to get
+# past YouTube's "Sign in to confirm you're not a bot" wall on datacenter IPs.
+# Keep the plugin and the server on the *same* version.
+bgutil-ytdlp-pot-provider==2.0.2
 pydantic>=2.7,<3
 pydantic-settings>=2.3,<3
 python-dotenv>=1.0,<2

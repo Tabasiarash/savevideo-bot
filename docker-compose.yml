@@ -23,10 +23,15 @@ services:
     environment:
       DB_PATH: /data/savevideo.db
       TEMP_DIR: /tmp/savevideo
+      # Point the bundled bgutil plugin at the pot-provider sidecar (below).
+      YTDLP_EXTRA_ARGS: >-
+        --extractor-args youtubepot-bgutilhttp:base_url=http://bgutil:4416
     volumes:
       - bot-data:/data
       - bot-tmp:/tmp/savevideo
       - ./cookies:/cookies:ro
+    depends_on:
+      - bgutil
     restart: unless-stopped
     stop_grace_period: 30s
     logging:
@@ -40,6 +45,19 @@ services:
       timeout: 15s
       start_period: 30s
       retries: 3
+
+  # YouTube PO-token provider. Generates the proof-of-origin tokens YouTube now
+  # requires; combined with a logged-in cookies.txt (COOKIES_FILE) it clears the
+  # "Sign in to confirm you're not a bot" wall on datacenter IPs. Keep this image
+  # version in sync with the bgutil-ytdlp-pot-provider pin in requirements.txt.
+  bgutil:
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Optional local Bot API server. Enabled only with --profile localapi.
   telegram-bot-api:
