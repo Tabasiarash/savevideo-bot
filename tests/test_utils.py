@@ -12,7 +12,6 @@ from bot.utils import (
     ip_is_public,
     is_supported_scheme,
     normalize_url,
-    parts_for_size,
     sanitize_filename,
     site_from_url,
     target_bitrate_bps,
@@ -146,11 +145,3 @@ def test_target_bitrate_bps():
     assert target_bitrate_bps(0, 10) == 0
     assert target_bitrate_bps(1000, 0) == 0
     assert target_bitrate_bps(8_000_000, 8) == int(8_000_000 * 8 * 0.95 / 8)
-
-
-def test_parts_for_size():
-    assert parts_for_size(100, 50) == 2
-    assert parts_for_size(50, 50) == 1
-    assert parts_for_size(101, 50) == 3
-    assert parts_for_size(0, 50) == 1
-    assert parts_for_size(100, 0) == 1

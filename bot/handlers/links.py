@@ -2,7 +2,7 @@
 
 Also implements deep-link starts, playlist mode, media-groups for multi-item
 posts and the size-limit fallback chain (lower quality → ffmpeg re-encode →
-split into parts → clear error).
+clear error).
 """
 
 from __future__ import annotations
@@ -38,7 +38,6 @@ from bot.services.downloader import (
     InfoError,
     YtDlpError,
     cleanup_dir,
-    split_media_by_size,
     transcode_audio_to_size,
     transcode_to_size,
     video_quality_rows,
@@ -435,24 +434,9 @@ async def _fit_video_size(
             break
 
     if current_size > limit:
-        # Last resort: split into <=limit parts (mirrors the audio path).
-        try:
-            outdir = flow.tmpdir / "split"
-            outdir.mkdir(parents=True, exist_ok=True)
-
-            async def _on_part(part: int, total_parts: int) -> None:
-                await _edit(
-                    message=flow.status_message,
-                    body=text(lang, "split_sending", part=part, total=total_parts),
-                )
-
-            # Small safety margin: VBR streams can exceed the nominal ratio.
-            return await split_media_by_size(current, outdir, int(limit * 0.95), _on_part)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("video split failed: %s", exc)
-            await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
-            await _record(srv.db, 0, flow.url, flow.url_site, fmt, "error", "too_large", current_size, flow.duration)
-            return None
+        await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
+        await _record(srv.db, 0, flow.url, flow.url_site, fmt, "error", "too_large", current_size, flow.duration)
+        return None
     return parts
 
 
@@ -467,26 +451,17 @@ async def _fit_audio_size(srv, flow: PendingFlow, parts: list[Path], total: int,
         if encoded.stat().st_size <= limit:
             return [encoded]
     except Exception as exc:  # noqa: BLE001
-        log.warning("audio re-encode failed, splitting instead: %s", exc)
+        log.warning("audio re-encode failed: %s", exc)
 
-    try:
-        outdir = flow.tmpdir / "split"
-        outdir.mkdir(parents=True, exist_ok=True)
-
-        async def _on_part(part: int, total_parts: int) -> None:
-            await _edit(message=flow.status_message, body=text(lang, "split_sending", part=part, total=total_parts))
-
-        return await split_media_by_size(current, outdir, limit, _on_part)
-    except DownloadError:
-        await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
-        return None
+    await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
+    return None
 
 
 async def _upload_video_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str) -> None:
     chat_id = flow.status_message.chat.id if flow.status_message else user_id
     for index, path in enumerate(parts, start=1):
         if len(parts) > 1:
-            await _edit(message=flow.status_message, body=text(lang, "split_sending", part=index, total=len(parts)))
+            await _edit(message=flow.status_message, body=text(lang, "sending_part", part=index, total=len(parts)))
         thumb = _find_thumbnail(flow.tmpdir)
         kwargs: dict[str, Any] = {
             "supports_streaming": True,
@@ -516,7 +491,7 @@ async def _upload_audio_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path]
     chat_id = flow.status_message.chat.id if flow.status_message else user_id
     for index, path in enumerate(parts, start=1):
         if len(parts) > 1:
-            await _edit(message=flow.status_message, body=text(lang, "split_sending", part=index, total=len(parts)))
+            await _edit(message=flow.status_message, body=text(lang, "sending_part", part=index, total=len(parts)))
         sent = await bot.send_audio(
             chat_id,
             FSInputFile(path),

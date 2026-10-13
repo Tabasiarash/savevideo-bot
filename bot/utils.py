@@ -12,7 +12,6 @@ import logging
 import re
 import socket
 from collections.abc import Iterable
-from math import ceil
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 log = logging.getLogger(__name__)
@@ -326,20 +325,6 @@ def target_bitrate_bps(size_limit_bytes: int, duration_s: float) -> int:
         return 0
     # ~5% container overhead / muxing allowance.
     return int(size_limit_bytes * 8 * 0.95 / duration_s)
-
-
-def parts_for_size(size_bytes: int, limit_bytes: int) -> int:
-    """How many parts a file of ``size_bytes`` splits into given a per-part limit."""
-    if size_bytes <= 0 or limit_bytes <= 0:
-        return 1
-    return max(1, ceil(size_bytes / limit_bytes))
-
-
-def part_seconds(duration_s: float, part: int) -> float:
-    """Duration of ``part`` (1-indexed) when a file is split evenly."""
-    if duration_s <= 0:
-        return duration_s
-    return duration_s / part
 
 
 def iter_hosts(urls: Iterable[str]) -> str:

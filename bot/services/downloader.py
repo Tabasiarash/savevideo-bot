@@ -602,62 +602,7 @@ async def transcode_audio_to_size(
     return out
 
 
-async def split_media_by_size(
-    input_path: Path,
-    outdir: Path,
-    part_bytes: int,
-    on_part: Callable[[int, int], Awaitable[None]],
-) -> list[Path]:
-    """Split a file into segments of at most ``part_bytes`` each.
-
-    Works by time-slicing with ffmpeg ``-c copy`` based on the size ratio.
-    Returns the produced part files.
-    """
-    total = input_path.stat().st_size
-    from bot.utils import parts_for_size
-
-    parts = parts_for_size(total, part_bytes)
-    if parts <= 1:
-        return [input_path]
-
-    duration_s = await _probe_duration(input_path)
-    if duration_s <= 0:
-        raise DownloadError("cannot split: unknown duration")
-
-    segment = duration_s / parts
-    produced: list[Path] = []
-    for i in range(1, parts + 1):
-        await on_part(i, parts)
-        start = (i - 1) * segment
-        length = segment if i < parts else duration_s - start
-        out = outdir / f"{input_path.stem}_part{i:02d}{input_path.suffix}"
-        ffmpeg = ffmpeg_binary()
-        args = [
-            ffmpeg,
-            "-y",
-            "-ss",
-            f"{start:.3f}",
-            "-i",
-            str(input_path),
-            "-t",
-            f"{length:.3f}",
-            "-c",
-            "copy",
-            "-avoid_negative_ts",
-            "make_zero",
-            str(out),
-        ]
-        process = await asyncio.create_subprocess_exec(
-            *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.STDOUT
-        )
-        await process.wait()
-        if process.returncode != 0 or not out.exists():
-            raise DownloadError(f"ffmpeg split failed at part {i}")
-        produced.append(out)
-    return produced
-
-
-async def _probe_duration(path: Path) -> float:
+async def probe_duration(path: Path) -> float:
     """Best-effort duration via ffprobe (off the event loop)."""
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
