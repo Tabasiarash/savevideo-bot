@@ -20,10 +20,13 @@ $EDITOR .env
 
 The bot and the server must see the bot's download directory at the **same
 absolute path** — in local mode the bot hands the server a filesystem path and
-the server opens the file itself. `BOT_TMP` in `.env` must equal the bot's
-`TEMP_DIR` (default `/opt/savevideo-bot/tmp`).
+the server opens the file itself. So:
 
-## 3. Start it
+- `BOT_TMP` must equal the bot's `TEMP_DIR` (default `/opt/savevideo-bot/tmp`).
+- `BOT_API_DATA` should equal the bot's `BOT_API_DATA_DIR` so `/health` can
+  report the server's free space.
+
+## 3. Start the server
 
 ```bash
 docker compose up -d
@@ -39,15 +42,16 @@ BOT_API_URL=http://127.0.0.1:8081
 MAX_UPLOAD_MB=2000
 ```
 
-Then **log the bot out of the cloud API once** (cloud and local servers cannot
-run simultaneously) and restart:
+Then log the bot out of the cloud API **once** (cloud and local servers cannot
+be used at the same time) and restart:
 
 ```bash
-curl "https://api.telegram.org/bot$BOT_TOKEN/logOut"
+TOKEN=$(grep -E '^BOT_TOKEN=' /opt/savevideo-bot/.env | cut -d= -f2-)
+curl -s "https://api.telegram.org/bot${TOKEN}/logOut"
 sudo systemctl restart savevideo-bot
-sudo journalctl -u savevideo-bot -f
+journalctl -u savevideo-bot -f
 ```
 
-`/health` should now show `Mode: local`, `Bot API: ok @yourbot`, and
-`Upload limit: 2000 MB`. Full step-by-step (including rollback) is in
-[`docs/MIGRATION.md`](../../docs/MIGRATION.md).
+Run `/health` in Telegram: expect `Mode: local`, `Bot API: ok @yourbot`,
+`Upload limit: 2000 MB`, and a `Data dir` line with free space. See
+[docs/MIGRATION.md](../../docs/MIGRATION.md) for the full runbook and rollback.

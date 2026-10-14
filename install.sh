@@ -161,41 +161,45 @@ say "  1) Public Bot API        — uploads up to 50 MB  ${DIM}(simplest)${RESET
 say "  2) Local Bot API server  — uploads up to 2000 MB ${DIM}(needs api_id/api_hash)${RESET}"
 CHOICE="$(ask "Choose 1 or 2" "1")"
 
-LOCAL_API="false"
-MAX_MB="50"
+BOT_API_URL=""
+MAX_UPLOAD_MB="50"
 TELEGRAM_API_ID=""
 TELEGRAM_API_HASH=""
-LOCAL_API_BASE="http://127.0.0.1:8081"
+BOT_API_DATA_DIR="${INSTALL_DIR:-/opt/savevideo-bot}/botapi-data"
+BOT_TMP="${INSTALL_DIR:-/opt/savevideo-bot}/tmp"
 
 if [[ "$CHOICE" == "2" ]]; then
-    LOCAL_API="true"
-    MAX_MB="2000"
+    BOT_API_URL="http://127.0.0.1:8081"
+    MAX_UPLOAD_MB="2000"
     say ""
     info "Get api_id/api_hash from https://my.telegram.org (API development tools)."
     TELEGRAM_API_ID="$(ask "TELEGRAM_API_ID")"
     TELEGRAM_API_HASH="$(ask "TELEGRAM_API_HASH")"
     [[ -n "$TELEGRAM_API_ID" && -n "$TELEGRAM_API_HASH" ]] || die "api_id and api_hash are required for a local server"
-    LOCAL_API_BASE="$(ask "Local Bot API base URL" "$LOCAL_API_BASE")"
+    BOT_API_URL="$(ask "Local Bot API base URL" "$BOT_API_URL")"
 
     if need docker; then
         if confirm "Start a telegram-bot-api container now (published on 127.0.0.1:8081)?" y; then
             info "starting aiogram/telegram-bot-api container"
+            mkdir -p "$BOT_API_DATA_DIR" "$BOT_TMP"
             docker rm -f telegram-bot-api >/dev/null 2>&1 || true
             docker run -d --name telegram-bot-api --restart unless-stopped \
                 -p 127.0.0.1:8081:8081 \
                 -e TELEGRAM_API_ID="$TELEGRAM_API_ID" \
                 -e TELEGRAM_API_HASH="$TELEGRAM_API_HASH" \
                 -e TELEGRAM_LOCAL=1 \
-                -v telegram-bot-api-data:/var/lib/telegram-bot-api \
+                -v "$BOT_API_DATA_DIR:/var/lib/telegram-bot-api" \
+                -v "$BOT_TMP:$BOT_TMP" \
                 aiogram/telegram-bot-api:latest >/dev/null
             info "container started; remember to call /logOut on the cloud API once"
         fi
     else
-        warn "Docker not found. Run a telegram-bot-api server yourself and set LOCAL_API_BASE accordingly."
-        warn "Example: docker run -d -p 127.0.0.1:8081:8081 -e TELEGRAM_API_ID=.. -e TELEGRAM_API_HASH=.. -e TELEGRAM_LOCAL=1 aiogram/telegram-bot-api"
+        warn "Docker not found. Run a telegram-bot-api server yourself and set BOT_API_URL accordingly."
+        warn "IMPORTANT: mount the bot's TEMP_DIR ($BOT_TMP) into the server at the same path."
+        warn "See deploy/telegram-bot-api/ for a ready-made compose file."
     fi
 else
-    MAX_MB="$(ask "Max upload size in MB" "50")"
+    MAX_UPLOAD_MB="$(ask "Max upload size in MB" "50")"
 fi
 
 step "Optional: anti-blocking"
@@ -209,8 +213,8 @@ fi
 step "Configuration summary"
 printf '  %sBot token%s      : %s\n' "$DIM" "$RESET" "${BOT_TOKEN%%:*}:••••••••"
 printf '  %sAdmins%s         : %s\n' "$DIM" "$RESET" "${ADMIN_IDS:-<none>}"
-printf '  %sUpload limit%s   : %s MB\n' "$DIM" "$RESET" "$MAX_MB"
-printf '  %sBot API%s        : %s\n' "$DIM" "$RESET" "$([[ "$LOCAL_API" == "true" ]] && echo "local ($LOCAL_API_BASE)" || echo cloud)"
+printf '  %sUpload limit%s   : %s MB\n' "$DIM" "$RESET" "$MAX_UPLOAD_MB"
+printf '  %sBot API%s        : %s\n' "$DIM" "$RESET" "$([[ -n "$BOT_API_URL" ]] && echo "local ($BOT_API_URL)" || echo cloud)"
 printf '  %sLanguage%s       : %s\n' "$DIM" "$RESET" "$DEFAULT_LANGUAGE"
 printf '  %sCookies%s        : %s\n' "$DIM" "$RESET" "${COOKIES_FILE:-<none>}"
 printf '  %sProxy%s          : %s\n' "$DIM" "$RESET" "${PROXY_URL:-<none>}"
@@ -226,20 +230,23 @@ cat > "$ENV_FILE" <<EOF
 BOT_TOKEN=$BOT_TOKEN
 ADMIN_IDS=$ADMIN_IDS
 
-MAX_MB=$MAX_MB
+MAX_UPLOAD_MB=$MAX_UPLOAD_MB
 
-LOCAL_API=$LOCAL_API
-LOCAL_API_BASE=$LOCAL_API_BASE
+BOT_API_URL=$BOT_API_URL
+BOT_API_DATA_DIR=$BOT_API_DATA_DIR
 TELEGRAM_API_ID=$TELEGRAM_API_ID
 TELEGRAM_API_HASH=$TELEGRAM_API_HASH
 
 MAX_JOBS=2
+YT_MAX_CONCURRENCY=2
+MAX_VIDEO_HEIGHT=1080
 PER_USER_DAILY_LIMIT=30
 COOLDOWN_SECONDS=3
 MAX_DURATION_MIN=60
 
 INFO_TIMEOUT=30
 DOWNLOAD_TIMEOUT=600
+UPLOAD_TIMEOUT_SECONDS=3600
 
 CACHE_TTL_DAYS=30
 
