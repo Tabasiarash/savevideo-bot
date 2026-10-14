@@ -356,33 +356,42 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
     try:
         if not parts:
             await _on_download_error(flow, user_id, DownloadError("no media produced"))
+            _cleanup_pending(flow)
+            cleanup_dir(flow.tmpdir)
             return
         total = sum(p.stat().st_size for p in parts)
-        await _deliver(srv, bot, flow, parts, fmt, user_id, lang, total)
+        consumed = await _deliver(srv, bot, flow, parts, fmt, user_id, lang, total)
     finally:
-        _cleanup_pending(flow)
-        cleanup_dir(flow.tmpdir)
+        if consumed:
+            _cleanup_pending(flow)
+            cleanup_dir(flow.tmpdir)
+        # else keep picker alive (over-limit / upload-fallback to link)
 
 
 async def _deliver(
     srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str, total: int
-) -> None:
-    """Send as one Telegram message, or hand over a link when too large / failed."""
+) -> bool:
+    """Send as one Telegram message, or hand over a link when too large / failed.
+
+    Returns True if the flow was consumed (uploaded to Telegram or terminal
+    error), False if the picker should remain alive (link delivered).
+    """
     if not settings.fits_upload_limit(total):
-        await _send_links(srv, flow, parts, fmt, user_id, lang, total)
-        return
+        await _send_links(srv, flow, parts, fmt, user_id, lang, total, keep_picker=True)
+        return False
 
     try:
         await _upload_with_retry(srv, bot, flow, parts, fmt, user_id, lang)
-        return
+        return True
     except Exception as exc:  # noqa: BLE001
         if _link_would_help(exc) and srv.download_links.enabled:
             log.info("upload failed (%s); delivering a link instead", type(exc).__name__)
-            await _send_links(srv, flow, parts, fmt, user_id, lang, total)
-            return
+            await _send_links(srv, flow, parts, fmt, user_id, lang, total, keep_picker=True)
+            return False
         log.warning("upload failed user_id=%s site=%s: %s", user_id, flow.url_site, exc)
         await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "error", "telegram", total, flow.duration)
         await _edit(message=flow.status_message, body=text(lang, "error_upload", error=str(exc)[:300]))
+        return True
 
 
 async def _upload_with_retry(
@@ -415,7 +424,7 @@ def _link_would_help(exc: Exception) -> bool:
 
 
 async def _send_links(
-    srv, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str, total: int
+    srv, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str, total: int, *, keep_picker: bool = False
 ) -> None:
     store = srv.download_links
     if not store.enabled:
@@ -438,7 +447,14 @@ async def _send_links(
         text(lang, "link_ready", limit=settings.max_mb, hours=settings.download_link_ttl_hours, url=r.url)
         for r in results
     )
-    await _edit(message=flow.status_message, body=body)
+    if keep_picker:
+        # Keep the picker alive so user can pick a lower-quality option that
+        # fits Telegram's upload limit and get the actual file instead of a link.
+        header = _choose_text(flow)
+        combined = f"{body}\n\n{header}" if header else body
+        await _edit(message=flow.status_message, body=combined, reply_markup=_build_keyboard(flow))
+    else:
+        await _edit(message=flow.status_message, body=body)
     for result in results:
         await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "link", None, result.size_bytes, flow.duration)
     await srv.db.touch_user(user_id)
