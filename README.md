@@ -16,8 +16,11 @@ are cached by Telegram `file_id`, so repeat downloads are instant.
 - 🧮 **Real size estimates** per quality in the picker, built from the actual
   yt-dlp formats.
 - 🪜 **Upload-limit resilience**: if a file is too big for your Bot API the bot
-  automatically tries a lower quality, then re-encodes with ffmpeg to fit, then
-  splits audio into parts — and only then reports an error.
+  automatically tries a lower quality and re-encodes with ffmpeg to fit it, and
+  only then reports a clear error. Oversized media is flagged in the picker
+  beforehand — it is never split into parts.
+- 📦 **Large files**: run a local Bot API server to send up to **2000 MB** as a
+  single file (`BOT_API_URL`, see [Large files](#large-files-local-bot-api)).
 - ⚡ **Instant cache**: a URL+format → `file_id` cache in SQLite (no re-download
   for repeated links).
 - 🧵 **Concurrency queue** with `MAX_JOBS` workers and per-user queue positions.
@@ -97,9 +100,12 @@ option has a safe default and the bot degrades gracefully.
 | --- | --- | --- |
 | `BOT_TOKEN` | — | **Required.** Token from @BotFather. |
 | `ADMIN_IDS` | *(empty)* | Comma-separated numeric admin user IDs. |
-| `MAX_MB` | `50` | Max upload size (use `2000` with a local API server). |
-| `LOCAL_API` | `false` | Use a self-hosted `telegram-bot-api` server. |
-| `LOCAL_API_BASE` | `http://telegram-bot-api:8081` | Local server origin. |
+| `MAX_UPLOAD_MB` | `50` / `2000` | Max upload size (MB). Auto-`2000` with `BOT_API_URL`; clamped to 2000. Legacy alias: `MAX_MB`. |
+| `BOT_API_URL` | *(empty)* | Local Bot API base URL, e.g. `http://127.0.0.1:8081`. Legacy: `LOCAL_API`/`LOCAL_API_BASE`. |
+| `BOT_API_DATA_DIR` | `/var/lib/telegram-bot-api` | Data volume of the local server (free space shown in `/health`). |
+| `UPLOAD_TIMEOUT_SECONDS` | `3600` | Upload timeout; large files via a local server take a while. |
+| `YT_MAX_CONCURRENCY` | `2` | Max concurrent yt-dlp downloads. |
+| `MAX_VIDEO_HEIGHT` | `1080` | Default height cap for `best` unless the user picks higher. |
 | `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | *(empty)* | Credentials for the local server. |
 | `MAX_JOBS` | `2` | Concurrent downloads. |
 | `PER_USER_DAILY_LIMIT` | `30` | Downloads per user per UTC day. |
@@ -115,7 +121,7 @@ option has a safe default and the bot degrades gracefully.
 | `YTDLP_EXTRA_ARGS` | *(empty)* | Extra yt-dlp CLI args, shell-quoted. |
 | `FORCE_IPV4` | `false` | Force IPv4 for every request. |
 | `FORCE_IPV6` | `false` | Force IPv6, **YouTube URLs only**. |
-| `JS_RUNTIME` | `auto` | JS engine for yt-dlp (`auto` = Deno→Node). |
+| `YTDLP_JS_RUNTIME` | `auto` | JS engine for yt-dlp (`auto` = Deno→Node ≥22). Legacy alias: `JS_RUNTIME`. |
 | `EGRESS_TEST_URL` | *(a YouTube video)* | URL probed by `/health`. |
 | `DB_PATH` | `data/savevideo.db` | SQLite database path. |
 | `TEMP_DIR` | `tmp` | Temporary download directory. |
@@ -125,22 +131,33 @@ option has a safe default and the bot degrades gracefully.
 ## Large files (local Bot API)
 
 The public Bot API limits uploads to 50 MB. To raise this to 2000 MB, run a
-[self-hosted Bot API server](https://github.com/tdlib/telegram-bot-api):
+[self-hosted Bot API server](https://github.com/tdlib/telegram-bot-api). Files
+are always sent as a **single message** — the bot never splits them.
 
 1. Get `api_id` / `api_hash` from <https://my.telegram.org>.
 2. Set in `.env`:
    ```env
-   LOCAL_API=true
-   LOCAL_API_BASE=http://telegram-bot-api:8081
+   BOT_API_URL=http://127.0.0.1:8081
    TELEGRAM_API_ID=123456
    TELEGRAM_API_HASH=abcdef0123456789
-   MAX_MB=2000
+   MAX_UPLOAD_MB=2000
    ```
-3. `docker compose --profile localapi up -d --build`
+3. Start the server:
+   - **Docker bot:** `docker compose --profile localapi up -d --build`
+   - **systemd bot:** `cd deploy/telegram-bot-api && docker compose up -d`
+     (see [deploy/telegram-bot-api](deploy/telegram-bot-api/README.md))
 
+> **Shared directory:** in local mode the bot passes the absolute path of a
+> finished download to the server, which opens the file itself. The bot's
+> `TEMP_DIR` and the server must therefore share the **same path** (both
+> compose files mount it for you).
+>
 > **First switch only:** log the bot out of the cloud API once by calling
 > `https://api.telegram.org/bot<token>/logOut`. Cloud and local servers cannot
 > be used at the same time.
+
+See [docs/MIGRATION.md](docs/MIGRATION.md) for a step-by-step runbook (including
+rollback) when migrating a running bot.
 
 ## YouTube: "Sign in to confirm you're not a bot"
 
@@ -171,8 +188,9 @@ Three ingredients, all present in this repo, clear the wall with no paid proxy:
    the bot at it via `YTDLP_EXTRA_ARGS`. **Keep the plugin and server versions
    equal** (both currently `2.0.2`).
 3. **JS runtime** — yt-dlp needs a JS engine to solve YouTube's `n`/signature
-   challenge. `JS_RUNTIME=auto` (default) prefers Deno then Node; the Docker
-   image ships Deno. Pin with `JS_RUNTIME=node` or `node:/usr/bin/node`.
+   challenge. `YTDLP_JS_RUNTIME=auto` (default) prefers Deno, then Node **>= 22**
+   (older Node is skipped automatically); the Docker image ships Deno. Pin with
+   `YTDLP_JS_RUNTIME=node` or `node:/usr/bin/node`.
 
 All three are required: the provider alone still hits the wall, and cookies alone
 return `Sign in…`. Cookies expire and automating an account carries some risk —
@@ -180,14 +198,18 @@ refresh them when `/health` regresses to `bot-wall`.
 
 ### Alternative: a non-datacenter egress
 
-1. **Home egress via Tailscale** (free). On a machine on your home network run a
-   SOCKS server, then point the VPS at it:
+1. **Home egress via Tailscale** (free). Tunnel the bot's yt-dlp traffic through
+   a SOCKS5 server on a home machine — see
+   [deploy/home-socks](deploy/home-socks/README.md) for a ready-made `ssh -D`
+   systemd unit:
    ```env
-   PROXY_URL=socks5h://user:pass@100.x.y.z:1080
+   PROXY_URL=socks5h://127.0.0.1:1080
    ```
-   The VPS systemd unit does not restrict address families, so `100.64.0.0/10`
-   is reachable as-is. Do **not** set a full exit node — only the bot's yt-dlp
-   traffic should use this proxy.
+   The bot's unit sets `RestrictAddressFamilies=AF_INET AF_INET6`, so
+   `127.0.0.1` and `100.64.0.0/10` (Tailscale) are reachable as-is. Do **not**
+   add `IPAddressDeny=any` unless you also allow-list every address the bot
+   needs. Do **not** set a full exit node — only the bot's yt-dlp traffic should
+   use this proxy.
 2. **Residential/mobile proxy** (paid). Must be *sticky* per job, because
    googlevideo media URLs are bound to the extraction IP:
    ```env
@@ -223,7 +245,7 @@ Telegram ── aiogram 3 ──► handlers ──► JobQueue ──► YtDlpR
                                         │                 │
                                         │                 ▼
                                         ▼            yt-dlp download
-                                   SQLite cache  ──► ffmpeg re-encode/split
+                                   SQLite cache  ──► ffmpeg re-encode to fit
                                         │                 │
                                         └────► upload (video/audio) ──► cache file_id
 ```
@@ -261,7 +283,7 @@ RUN_NETWORK_TESTS=1 pytest -m network
 | Symptom | Fix |
 | --- | --- |
 | “Sign in to confirm you're not a bot” | Configure `COOKIES_FILE` or `PROXY_URL`. |
-| Upload fails with a size error | Lower `MAX_MB` or enable a local Bot API server. |
+| Upload fails with a size error | Lower `MAX_UPLOAD_MB` or enable a local Bot API server. |
 | `ffmpeg: not found` in `/health` | Install ffmpeg (`apt install ffmpeg`). |
 | Downloads keep failing | `/update_ytdlp` or check `docker compose logs bot`. |
 | Nothing works after switching to local API | Call `…/logOut` once (see above). |

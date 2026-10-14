@@ -1,0 +1,131 @@
+# Migration runbook: splitting → local Bot API
+
+This runbook moves a running **savevideo-bot** install from the old behaviour
+(public Bot API + splitting oversized files into parts) to the new behaviour:
+
+- oversized media is **never split**; it is either accepted whole (<= the Bot
+  API limit) or rejected with a clear "too large" message;
+- uploads up to **2000 MB** via a self-hosted **local Bot API** server;
+- hardened yt-dlp egress (proxy, retries, JS runtime, `/health` diagnostics).
+
+The steps are safe to run at any time; the bot keeps working on the public API
+until you explicitly switch (step 5). Work is done **locally** in small commits;
+this document is the operational runbook.
+
+## Prerequisites
+
+- Root (or sudo) on the bot host, and Docker for the local Bot API server.
+- `api_id` / `api_hash` from <https://my.telegram.org>.
+- The bot token (in the existing `.env`).
+
+## 0. Back up
+
+```bash
+cd /opt/savevideo-bot
+sudo cp .env .env.bak.$(date +%F)
+sudo cp data/savevideo.db data/savevideo.db.bak.$(date +%F) 2>/dev/null || true
+sudo cp /etc/savevideo-bot/yt_cookies.txt /etc/savevideo-bot/yt_cookies.txt.bak 2>/dev/null || true
+```
+
+## 1. Update the code
+
+```bash
+sudo ./deploy.sh          # syncs code + deps, reinstalls unit, restarts
+```
+
+The new unit adds `RestrictAddressFamilies=AF_INET AF_INET6`. Leave the
+`IPAddressAllow`/`IPAddressDeny` block commented unless you have listed every
+address the bot needs.
+
+## 2. Configure the local Bot API
+
+```bash
+cd /opt/savevideo-bot/deploy/telegram-bot-api
+cp .env.example .env
+sudo $EDITOR .env          # TELEGRAM_API_ID / TELEGRAM_API_HASH, BOT_TMP
+docker compose up -d
+docker compose logs -f telegram-bot-api
+```
+
+`BOT_TMP` must equal the bot's `TEMP_DIR`. In local mode the bot hands the
+server an **absolute filesystem path** and the server opens the file itself, so
+both processes must see the same directory at the same path.
+
+## 3. Point the bot at the server
+
+```bash
+sudo $EDITOR /opt/savevideo-bot/.env
+```
+
+```env
+BOT_API_URL=http://127.0.0.1:8081
+MAX_UPLOAD_MB=2000
+```
+
+`MAX_UPLOAD_MB` is clamped to 2000. The legacy `LOCAL_API`/`LOCAL_API_BASE` and
+`MAX_MB` names still work, so an old `.env` keeps starting — but prefer the new
+names.
+
+## 4. Log the bot out of the cloud API (one time)
+
+A bot cannot use the cloud and a local Bot API at the same time. Run this
+**once**:
+
+```bash
+TOKEN=$(grep -E '^BOT_TOKEN=' /opt/savevideo-bot/.env | cut -d= -f2-)
+curl -s "https://api.telegram.org/bot${TOKEN}/logOut"
+```
+
+## 5. Restart and verify
+
+```bash
+sudo systemctl restart savevideo-bot
+journalctl -u savevideo-bot -f
+```
+
+In Telegram, as an admin, run `/health`. Expect:
+
+- `Mode: local`
+- `Upload limit: 2000 MB`
+- `Bot API: ok @yourbot`
+- `Data dir: <free space>` (the server's data volume)
+- `Egress: ✅ <title>`
+
+Then send a link for a **>50 MB** video and confirm it arrives as a **single
+file** (no `_part1`/`_part2`). Also confirm a small audio download still works.
+
+## 6. Egress hardening (optional but recommended)
+
+If YouTube shows `bot-wall` on `/health`, add one of:
+
+- **Home egress** — see `deploy/home-socks/`, then set
+  `PROXY_URL=socks5h://127.0.0.1:1080`.
+- **Fresh cookies + PO-token provider + JS runtime** — see the README
+  ("Works on a datacenter IP").
+
+After changing these, restart and re-check `/health`. The egress probe result is
+cached for 5 minutes.
+
+## Rollback
+
+```bash
+sudo $EDITOR /opt/savevideo-bot/.env     # remove BOT_API_URL, set MAX_UPLOAD_MB=50
+TOKEN=$(grep -E '^BOT_TOKEN=' /opt/savevideo-bot/.env | cut -d= -f2-)
+curl -s "https://api.telegram.org/bot${TOKEN}/logOut"   # switch back to cloud
+sudo systemctl restart savevideo-bot
+```
+
+Then `cd deploy/telegram-bot-api && docker compose down`. The database and cache
+are untouched by the migration, so cached files keep working.
+
+## What changed (for reference)
+
+| Area | Before | After |
+| --- | --- | --- |
+| Oversized media | split into parts | rejected with a clear error |
+| Big-file uploads | 50 MB cap | up to 2000 MB via local Bot API |
+| Picker | — | options over the limit are flagged |
+| yt-dlp | 3 retries, no request sleep | 10 retries, `--sleep-requests 1`, concurrency cap |
+| IP family | applied globally | skipped when a proxy is set |
+| Format cap | `best` = any height | `best` capped at `MAX_VIDEO_HEIGHT` (1080p) |
+| `/health` | basic | server mode, upload limit, Bot API reachability, data dir |

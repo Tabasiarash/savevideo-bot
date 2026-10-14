@@ -72,6 +72,10 @@ services:
       TELEGRAM_LOCAL: "1"
     volumes:
       - botapi-data:/var/lib/telegram-bot-api
+      # The bot hands the local server absolute paths to finished downloads, so
+      # the server MUST see the same directory at the same path. Sharing the
+      # bot-tmp volume here is what makes >50 MB uploads work.
+      - bot-tmp:/tmp/savevideo
     restart: unless-stopped
     logging:
       driver: json-file

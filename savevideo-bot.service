@@ -3,6 +3,8 @@ Description=savevideo-bot (Telegram video/audio downloader)
 Documentation=https://github.com/Tabasiarash/savevideo-bot
 After=network-online.target
 Wants=network-online.target
+# When using a self-hosted Bot API server (BOT_API_URL), it must be up first:
+# After=telegram-bot-api.service docker.service
 
 [Service]
 Type=simple
@@ -25,6 +27,15 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
+# yt-dlp + aiogram only need IPv4/IPv6 sockets. AF_UNIX is covered by the
+# default; AF_NETLINK etc. are not needed for a plain network service.
+RestrictAddressFamilies=AF_INET AF_INET6
+# Optionally restrict egress further with an address allow-list, e.g. to force
+# all traffic through a home/Tailscale SOCKS egress at 100.x.y.z:
+#   IPAddressAllow=100.64.0.0/10 127.0.0.1
+#   IPAddressDeny=any
+# Left disabled by default because it breaks the public Bot API, DNS and the
+# bundled bgutil provider unless every needed address is listed.
 ReadWritePaths=/opt/savevideo-bot/data /opt/savevideo-bot/tmp /opt/savevideo-bot/.venv
 
 [Install]

@@ -1,0 +1,41 @@
+# Standalone local Bot API server for a systemd (non-Docker) bot install.
+#
+#   cd deploy/telegram-bot-api
+#   cp .env.example .env      # set TELEGRAM_API_ID / TELEGRAM_API_HASH
+#   docker compose up -d
+#
+# Then point the bot at it (in /opt/savevideo-bot/.env):
+#   BOT_API_URL=http://127.0.0.1:8081
+#   MAX_UPLOAD_MB=2000
+#
+# IMPORTANT — shared download directory
+# -------------------------------------
+# In local mode the bot passes the *absolute path* of a finished download to the
+# Bot API server, which opens that path itself. The server therefore has to see
+# exactly the same directory at exactly the same path. BOT_TMP below is the
+# bind mount used for that: keep it identical to the bot's TEMP_DIR
+# (/opt/savevideo-bot/tmp by default) and to INSTALL_DIR in deploy.sh.
+services:
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: telegram-bot-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TELEGRAM_LOCAL: "1"
+      TELEGRAM_HTTP_PORT: "8081"
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+      # Path must match the bot's TEMP_DIR (see note above).
+      - ${BOT_TMP:-/opt/savevideo-bot/tmp}:${BOT_TMP:-/opt/savevideo-bot/tmp}
+    ports:
+      # Bind to loopback only; the bot talks to it locally.
+      - "127.0.0.1:8081:8081"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  telegram-bot-api-data:
