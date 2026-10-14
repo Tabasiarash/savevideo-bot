@@ -125,6 +125,9 @@ option has a safe default and the bot degrades gracefully.
 | `UPDATE_CHECK_HOURS` | `24` | Update interval. |
 | `COOKIES_FILE` | *(empty)* | Path to a Netscape `cookies.txt`. |
 | `PROXY_URL` | *(empty)* | Proxy for yt-dlp, e.g. `socks5h://user:pass@host:1080`. |
+| `PROXY_URL_INSTAGRAM` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
+| `PROXY_URL_TIKTOK` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
+| `PROXY_URL_X` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
 | `YTDLP_EXTRA_ARGS` | *(empty)* | Extra yt-dlp CLI args, shell-quoted. |
 | `FORCE_IPV4` | `false` | Force IPv4 for every request. |
 | `FORCE_IPV6` | `false` | Force IPv6, **YouTube URLs only**. |
@@ -217,11 +220,19 @@ refresh them when `/health` regresses to `bot-wall`.
    ```env
    PROXY_URL=socks5h://127.0.0.1:1080
    ```
+   (Use whatever local port is free — `1080` is often already taken; the
+   home-socks example uses `1090`.)
    The bot's unit sets `RestrictAddressFamilies=AF_INET AF_INET6`, so
    `127.0.0.1` and `100.64.0.0/10` (Tailscale) are reachable as-is. Do **not**
    add `IPAddressDeny=any` unless you also allow-list every address the bot
    needs. Do **not** set a full exit node — only the bot's yt-dlp traffic should
-   use this proxy.
+   use this proxy. If the home link is metered (e.g. phone on mobile data),
+   route only the sites that need it with the per-platform overrides:
+   ```env
+   PROXY_URL_INSTAGRAM=
+   PROXY_URL_TIKTOK=
+   PROXY_URL_X=
+   ```
 2. **Residential/mobile proxy** (paid). Must be *sticky* per job, because
    googlevideo media URLs are bound to the extraction IP:
    ```env
@@ -248,7 +259,7 @@ refresh them when `/health` regresses to `bot-wall`.
 | `/broadcast <text>` | Send a message to every active user. |
 | `/ban <user_id>` / `/unban <user_id>` | Block / unblock a user. |
 | `/update_ytdlp` | Update yt-dlp immediately. |
-| `/health` | Versions, disk, queue, proxy/cookies/JS-runtime/curl_cffi, and a live egress probe. |
+| `/health` | Versions, disk, queue, proxy/cookies/JS-runtime/curl_cffi, a live egress probe, and the masked proxy exit IP. |
 
 ## How it works
 

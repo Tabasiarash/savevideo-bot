@@ -16,6 +16,7 @@ ExecStart=/usr/bin/ssh -N \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
     -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile=/etc/savevideo-bot/home-socks.known_hosts \
     -i ${HOME_SOCKS_KEY} \
     -p ${HOME_SOCKS_PORT} \
     ${HOME_SOCKS_USER}@${HOME_SOCKS_HOST}
@@ -33,6 +34,9 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# The known_hosts file lives under /etc, which ProtectSystem=strict makes
+# read-only; allow writing just that directory so accept-new can persist.
+ReadWritePaths=/etc/savevideo-bot
 
 [Install]
 WantedBy=multi-user.target

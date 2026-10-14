@@ -118,12 +118,25 @@ def test_defaults_are_graceful():
 def test_anti_blocking_defaults():
     s = _settings()
     assert s.proxy_url == ""
+    assert s.proxy_url_instagram == ""
+    assert s.proxy_url_tiktok == ""
+    assert s.proxy_url_x == ""
     assert s.cookies_file == ""
     assert s.ytdlp_extra_args == ""
     assert s.force_ipv4 is False
     assert s.force_ipv6 is False
     assert s.js_runtime == "auto"
     assert s.egress_test_url.startswith("https://")
+
+
+def test_platform_proxy_env_aliases(monkeypatch):
+    monkeypatch.setenv("PROXY_URL_TIKTOK", "socks5h://tt:1080")
+    monkeypatch.setenv("PROXY_URL_X", "socks5h://x:1080")
+    monkeypatch.setenv("PROXY_URL_INSTAGRAM", "socks5h://ig:1080")
+    s = Settings(_env_file=None, bot_token="x")
+    assert s.proxy_url_tiktok == "socks5h://tt:1080"
+    assert s.proxy_url_x == "socks5h://x:1080"
+    assert s.proxy_url_instagram == "socks5h://ig:1080"
 
 
 def test_anti_blocking_overrides():

@@ -80,6 +80,7 @@ async def test_health(services, make_message, monkeypatch):
         "JS runtime: deno",
         "curl_cffi: 0.13.0",
         "Egress: ✅",
+        "Proxy exit: ❌ proxy off",
         "Mode: cloud",
         "Upload limit: 50 MB",
         "Bot API: cloud",
@@ -123,6 +124,25 @@ async def test_health_masks_proxy_and_reports_failure(services, make_message, mo
     assert "secret" not in body
     assert "***@100.64.0.5:1080" in body
     assert "bot-wall" in body
+
+
+async def test_health_reports_platform_proxy_and_exit_ip(services, make_message, monkeypatch):
+    async def fake_version():
+        return "2026.01.01"
+
+    async def ok_proxy_exit():
+        return SimpleNamespace(ok=True, detail="203.0.*.*")
+
+    monkeypatch.setattr(admin, "cli_version", fake_version)
+    monkeypatch.setattr(admin, "_ffmpeg_version", lambda: "ffmpeg version test")
+    monkeypatch.setattr(admin.settings, "proxy_url", "socks5h://base:1080")
+    monkeypatch.setattr(admin.settings, "proxy_url_tiktok", "socks5h://tt:1080")
+    monkeypatch.setattr(services.runner, "probe_proxy_egress", ok_proxy_exit)
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_health(msg)
+    body = msg.sent[0]
+    assert "tt=socks5h://tt:1080" in body
+    assert "Proxy exit: ✅ 203.0.*.*" in body
 
 
 async def test_parse_user_id():

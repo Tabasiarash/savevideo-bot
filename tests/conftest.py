@@ -113,6 +113,9 @@ class FakeRunner:
     async def probe_egress(self, url=None):
         return SimpleNamespace(ok=True, detail="Test Video")
 
+    async def probe_proxy_egress(self):
+        return SimpleNamespace(ok=False, detail="proxy off")
+
 
 class FakeUpdater:
     def __init__(self) -> None:

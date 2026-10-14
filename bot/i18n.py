@@ -117,7 +117,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "curl_cffi: {curl_cffi}\n"
             "IP family: {ip_family}\n"
             "Extra args: {extra_args}\n"
-            "Egress: {egress}"
+            "Egress: {egress}\n"
+            "Proxy exit: {proxy_exit}"
         ),
         "inline_deeplink_title": "Download {title}",
         "inline_deeplink_desc": "Tap here to open the bot and choose a format.",
@@ -236,7 +237,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "curl_cffi: {curl_cffi}\n"
             "IP family: {ip_family}\n"
             "Extra args: {extra_args}\n"
-            "Egress: {egress}"
+            "Egress: {egress}\n"
+            "Proxy exit: {proxy_exit}"
         ),
         "inline_deeplink_title": "{title} herunterladen",
         "inline_deeplink_desc": "Tippe hier, um den Bot zu öffnen und ein Format zu wählen.",
@@ -354,7 +356,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "curl_cffi: {curl_cffi}\n"
             "IP family: {ip_family}\n"
             "Extra args: {extra_args}\n"
-            "Egress: {egress}"
+            "Egress: {egress}\n"
+            "Proxy exit: {proxy_exit}"
         ),
         "inline_deeplink_title": "دانلود {title}",
         "inline_deeplink_desc": "برای باز کردن ربات و انتخاب فرمت اینجا را لمس کنید.",

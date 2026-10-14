@@ -117,12 +117,15 @@ file** (no `_part1`/`_part2`). Also confirm a small audio download still works.
 If YouTube shows `bot-wall` on `/health`, add one of:
 
 - **Home egress** — see `deploy/home-socks/`, then set
-  `PROXY_URL=socks5h://127.0.0.1:1080`.
+  `PROXY_URL=socks5h://127.0.0.1:1090` (use whatever local port is free — `1080`
+  is often already taken). Route only the sites that need it with
+  `PROXY_URL_INSTAGRAM` / `PROXY_URL_TIKTOK` / `PROXY_URL_X` (each falls back to
+  `PROXY_URL`).
 - **Fresh cookies + PO-token provider + JS runtime** — see the README
   ("Works on a datacenter IP").
 
 After changing these, restart and re-check `/health`. The egress probe result is
-cached for 5 minutes.
+cached for 5 minutes; the lightweight proxy-exit check is cached for 1 minute.
 
 ## Rollback
 

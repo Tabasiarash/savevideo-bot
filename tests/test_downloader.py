@@ -12,6 +12,7 @@ from bot.services.downloader import (
     _collect_media_files,
     _is_youtube_url,
     _parse_size,
+    _platform_proxy,
     best_estimate,
     classify_egress_error,
     curl_cffi_version,
@@ -19,6 +20,8 @@ from bot.services.downloader import (
     disk_free_bytes,
     ensure_ffmpeg_available,
     estimate_format_size,
+    format_proxy_summary,
+    mask_ip,
     mask_proxy,
     video_quality_rows,
 )
@@ -245,6 +248,30 @@ def test_force_ip_family_skipped_when_proxy_set(monkeypatch):
     assert "--force-ipv6" not in args
 
 
+def test_platform_proxy_override_and_fallback():
+    s = _settings(
+        proxy_url="socks5h://base:1080",
+        proxy_url_instagram="socks5h://ig:1080",
+        proxy_url_tiktok="",
+        proxy_url_x="socks5h://x:1080",
+    )
+    assert _platform_proxy(s, "https://www.instagram.com/reel/x/") == "socks5h://ig:1080"
+    assert _platform_proxy(s, "https://www.tiktok.com/@u/video/1") == "socks5h://base:1080"
+    assert _platform_proxy(s, "https://twitter.com/u/status/1") == "socks5h://x:1080"
+    assert _platform_proxy(s, "https://x.com/u/status/1") == "socks5h://x:1080"
+    assert _platform_proxy(s, "https://vimeo.com/1") == "socks5h://base:1080"
+    assert _platform_proxy(s, None) == "socks5h://base:1080"
+
+
+def test_extra_args_uses_platform_proxy(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(
+        _settings(proxy_url="socks5h://base:1080", proxy_url_x="socks5h://x:1080")
+    )
+    args = runner._extra_args(playlist=False, playlist_items=None, url="https://x.com/u/status/1")
+    assert args[args.index("--proxy") + 1] == "socks5h://x:1080"
+
+
 def test_force_ipv6_only_for_youtube(monkeypatch):
     _no_js(monkeypatch)
     runner = YtDlpRunner(_settings(force_ipv6=True))
@@ -325,6 +352,58 @@ def test_mask_proxy():
     assert mask_proxy("socks5h://user:secret@100.64.0.5:1080") == "socks5h://***@100.64.0.5:1080"
     assert mask_proxy("http://1.2.3.4:8080") == "http://1.2.3.4:8080"
     assert "secret" not in mask_proxy("http://u:secret@h.example:1")
+
+
+def test_mask_ip():
+    assert mask_ip("203.0.113.42") == "203.0.*.*"
+    assert mask_ip("  198.51.100.7  ") == "198.51.*.*"
+    assert mask_ip("2001:db8::1") == "2001:db8:*"
+    assert mask_ip("") == "unknown"
+    assert mask_ip(None) == "unknown"
+    assert mask_ip("not-an-ip") == "not-an-ip"
+
+
+def test_format_proxy_summary():
+    assert format_proxy_summary(_settings()) == "off"
+    s = _settings(proxy_url="socks5h://base:1080", proxy_url_tiktok="socks5h://tt:1080")
+    out = format_proxy_summary(s)
+    assert out.startswith("socks5h://base:1080")
+    assert "tt=socks5h://tt:1080" in out
+
+async def test_probe_proxy_egress_off():
+    probe = await YtDlpRunner(_settings()).probe_proxy_egress()
+    assert not probe.ok
+    assert "off" in probe.detail
+
+
+async def test_probe_proxy_egress_ok_and_cached(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_exit_ip(proxy):
+        calls["n"] += 1
+        return "203.0.113.42\n"
+
+    monkeypatch.setattr(dl, "_exit_ip", fake_exit_ip)
+    runner = YtDlpRunner(_settings(proxy_url="socks5h://127.0.0.1:1080"))
+    probe = await runner.probe_proxy_egress()
+    assert probe.ok and probe.detail == "203.0.*.*"
+    await runner.probe_proxy_egress()
+    assert calls["n"] == 1
+
+
+async def test_probe_proxy_egress_failure_logs_once(monkeypatch, caplog):
+    def boom(url, **kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(dl, "_exit_ip", boom)
+    monkeypatch.setattr(dl, "_proxy_warned", [False])
+    runner = YtDlpRunner(_settings(proxy_url="socks5h://127.0.0.1:1080"))
+    with caplog.at_level("WARNING"):
+        first = await runner.probe_proxy_egress()
+        runner._proxy_exit_cache = None
+        second = await runner.probe_proxy_egress()
+    assert not first.ok and not second.ok
+    assert sum("proxy egress check failed" in r.message for r in caplog.records) == 1
 
 
 def test_curl_cffi_version_is_str():

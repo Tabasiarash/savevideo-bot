@@ -31,7 +31,16 @@ log = logging.getLogger(__name__)
 _PROGRESS_RE = re.compile(r"\[download\]\s+([\d.]+)%")
 
 _YT_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
+_INSTAGRAM_HOSTS = ("instagram.com", "instagr.am")
+_TIKTOK_HOSTS = ("tiktok.com",)
+_X_HOSTS = ("x.com", "twitter.com")
 EGRESS_CACHE_TTL = 300.0
+# Lightweight proxy-reachability check (see probe_proxy_egress).
+PROXY_EXIT_CACHE_TTL = 60.0
+PROXY_EXIT_TIMEOUT = 3.0
+PROXY_EXIT_URL = "https://ifconfig.me/ip"
+# Latch so a down proxy logs exactly one warning per outage (no retry-storm).
+_proxy_warned = [False]
 
 ProgressCallback = Callable[[float, int, int], Awaitable[None]]
 VoidCallback = Callable[[], Awaitable[None]]
@@ -114,6 +123,7 @@ class YtDlpRunner:
         self.settings = settings
         self._yt_sem = asyncio.Semaphore(max(1, settings.yt_max_concurrency))
         self._egress_cache: tuple[float, str, EgressProbe] | None = None
+        self._proxy_exit_cache: tuple[float, EgressProbe] | None = None
 
     def _extra_args(
         self,
@@ -131,8 +141,9 @@ class YtDlpRunner:
         else:
             args += ["--no-playlist"]
         args += self._cookie_args(cookiejar_dir)
-        if self.settings.proxy_url:
-            args += ["--proxy", self.settings.proxy_url]
+        proxy = _platform_proxy(self.settings, url)
+        if proxy:
+            args += ["--proxy", proxy]
         # The IP-family overrides can fight the proxy's routing, so only apply
         # them when talking to the origin directly.
         elif self.settings.force_ipv4:
@@ -434,19 +445,62 @@ class YtDlpRunner:
             return EgressProbe(ok=True, detail=(lines[0][:100] if lines else "ok"))
         return EgressProbe(ok=False, detail=classify_egress_error(err.decode("utf-8", "replace")))
 
+    async def probe_proxy_egress(self) -> EgressProbe:
+        """Fetch the public exit IP through the configured proxy.
+
+        Unlike :meth:`probe_egress` this does not run yt-dlp: it only verifies
+        that the proxy is reachable and reports the egress IP (masked). Cached
+        briefly, and a down proxy logs exactly one warning per outage.
+        """
+        proxy = (self.settings.proxy_url or "").strip()
+        if not proxy:
+            return EgressProbe(ok=False, detail="proxy off")
+        now = time.monotonic()
+        cached = self._proxy_exit_cache
+        if cached and now - cached[0] < PROXY_EXIT_CACHE_TTL:
+            return cached[1]
+        result = await _fetch_exit_ip(proxy)
+        self._proxy_exit_cache = (now, result)
+        if result.ok:
+            _proxy_warned[0] = False
+        elif not _proxy_warned[0]:
+            log.warning("proxy egress check failed: %s", result.detail)
+            _proxy_warned[0] = True
+        return result
+
 
 # --------------------------------------------------------------------------
 # Pure helpers (unit-testable without the CLI)
 # --------------------------------------------------------------------------
 
-def _is_youtube_url(url: str | None) -> bool:
+def _url_host(url: str | None) -> str:
     if not url:
-        return False
+        return ""
     try:
-        host = (urlsplit(url).hostname or "").lower()
+        return (urlsplit(url).hostname or "").lower()
     except ValueError:
-        return False
-    return any(host == h or host.endswith("." + h) for h in _YT_HOSTS)
+        return ""
+
+
+def _host_matches(host: str, hosts: tuple[str, ...]) -> bool:
+    return any(host == h or host.endswith("." + h) for h in hosts)
+
+
+def _is_youtube_url(url: str | None) -> bool:
+    return _host_matches(_url_host(url), _YT_HOSTS)
+
+
+def _platform_proxy(settings: Settings, url: str | None) -> str:
+    """Pick the proxy for ``url``: a per-platform override, else ``PROXY_URL``."""
+    host = _url_host(url)
+    if host:
+        if _host_matches(host, _INSTAGRAM_HOSTS):
+            return settings.proxy_url_instagram or settings.proxy_url
+        if _host_matches(host, _TIKTOK_HOSTS):
+            return settings.proxy_url_tiktok or settings.proxy_url
+        if _host_matches(host, _X_HOSTS):
+            return settings.proxy_url_x or settings.proxy_url
+    return settings.proxy_url
 
 
 _NODE_MIN_MAJOR = 22
@@ -525,6 +579,80 @@ def mask_proxy(url: str) -> str:
     if parts.username or parts.password:
         netloc = "***@" + netloc
     return f"{parts.scheme}://{netloc}{parts.path or ''}"
+
+
+def format_proxy_summary(settings: Settings) -> str:
+    """Masked ``PROXY_URL`` plus any per-platform overrides, for ``/health``."""
+    base = mask_proxy(settings.proxy_url)
+    overrides = [
+        f"{label}={mask_proxy(value)}"
+        for label, value in (
+            ("ig", settings.proxy_url_instagram),
+            ("tt", settings.proxy_url_tiktok),
+            ("x", settings.proxy_url_x),
+        )
+        if value
+    ]
+    return f"{base} [{', '.join(overrides)}]" if overrides else base
+
+
+def mask_ip(value: str | None) -> str:
+    """Mask the host bits of an IP address for display/logging."""
+    ip = (value or "").strip()
+    if not ip:
+        return "unknown"
+    if ":" in ip:  # IPv6: keep the first two hextets.
+        parts = [p for p in ip.split(":") if p]
+        return f"{':'.join(parts[:2])}:*" if parts else "unknown"
+    parts = ip.split(".")
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        return f"{parts[0]}.{parts[1]}.*.*"
+    return ip
+
+
+def _exit_ip(proxy: str) -> str:
+    """Return the public IP seen through ``proxy`` (blocking; run in a thread)."""
+    try:
+        import curl_cffi.requests as requests
+    except Exception:  # noqa: BLE001 - fall back to the curl binary
+        return _exit_ip_curl(proxy)
+    resp = requests.get(
+        PROXY_EXIT_URL,
+        proxies={"http": proxy, "https": proxy},
+        timeout=PROXY_EXIT_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return (resp.text or "").strip()
+
+
+def _exit_ip_curl(proxy: str) -> str:
+    curl = shutil.which("curl")
+    if not curl:
+        raise RuntimeError("no HTTP client available for proxy check")
+    out = subprocess.run(
+        [curl, "-fsS", "--max-time", str(int(PROXY_EXIT_TIMEOUT)), "--proxy", proxy, PROXY_EXIT_URL],
+        capture_output=True,
+        text=True,
+        timeout=int(PROXY_EXIT_TIMEOUT) + 2,
+        check=True,
+    )
+    return out.stdout.strip()
+
+
+async def _fetch_exit_ip(proxy: str) -> EgressProbe:
+    """Resolve the egress IP through ``proxy`` with a short timeout."""
+    try:
+        ip = await asyncio.wait_for(
+            asyncio.to_thread(_exit_ip, proxy), timeout=PROXY_EXIT_TIMEOUT + 2
+        )
+    except TimeoutError:
+        return EgressProbe(ok=False, detail="timeout")
+    except Exception as exc:  # noqa: BLE001
+        return EgressProbe(ok=False, detail=f"error: {type(exc).__name__}")
+    ip = (ip or "").strip()
+    if not ip:
+        return EgressProbe(ok=False, detail="empty response")
+    return EgressProbe(ok=True, detail=mask_ip(ip))
 
 
 def classify_egress_error(text: str) -> str:

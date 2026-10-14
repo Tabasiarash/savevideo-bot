@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     # --- Anti-blocking ---
     cookies_file: str = ""
     proxy_url: str = ""
+    # Optional per-platform proxy overrides. Each falls back to PROXY_URL when
+    # unset. Useful for sending only the sites that need it (e.g. YouTube,
+    # TikTok) through a metered home/mobile egress while the rest goes direct.
+    proxy_url_instagram: str = ""
+    proxy_url_tiktok: str = ""
+    proxy_url_x: str = ""
     # Extra yt-dlp flags, shell-quoted, appended last (may override defaults).
     ytdlp_extra_args: str = ""
     # Force an IP family. IPv6 is only ever applied to YouTube URLs because a

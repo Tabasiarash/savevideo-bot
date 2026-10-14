@@ -21,7 +21,7 @@ from bot.services.downloader import (
     curl_cffi_version,
     detect_js_runtime,
     disk_free_bytes,
-    mask_proxy,
+    format_proxy_summary,
 )
 from bot.services.updater import cli_version
 from bot.utils import format_size
@@ -166,6 +166,8 @@ async def cmd_health(message: Message) -> None:
     mode = "local" if settings.is_local_api else "cloud"
     probe = await srv.runner.probe_egress(settings.egress_test_url)
     egress = f"✅ {probe.detail}" if probe.ok else f"❌ {probe.detail}"
+    proxy_probe = await srv.runner.probe_proxy_egress()
+    proxy_exit = f"✅ {proxy_probe.detail}" if proxy_probe.ok else f"❌ {proxy_probe.detail}"
     await message.answer(
         text(
             "en",
@@ -179,13 +181,14 @@ async def cmd_health(message: Message) -> None:
             limit=settings.max_mb,
             api=await _bot_api_status(srv),
             data_dir=_data_dir_status(),
-            proxy=mask_proxy(settings.proxy_url),
+            proxy=format_proxy_summary(settings),
             cookies=_cookies_status(settings.cookies_file),
             js_runtime=detect_js_runtime(settings) or "none",
             curl_cffi=curl_cffi_version() or "not installed",
             ip_family=_ip_family_label(),
             extra_args=settings.ytdlp_extra_args or "none",
             egress=egress,
+            proxy_exit=proxy_exit,
         )
     )
 
