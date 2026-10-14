@@ -107,6 +107,26 @@ class Settings(BaseSettings):
     db_path: str = "data/savevideo.db"
     temp_dir: str = "tmp"
     log_level: str = "INFO"
+    # Refuse to start a download when the filesystem holding TEMP_DIR has less
+    # than this much free space (4K files are large).
+    min_free_disk_gb: float = 5.0
+
+    # --- Over-limit delivery via signed download links ------------------------
+    # Public origin that serves DOWNLOAD_LINK_DIR, e.g. https://dl.example.com.
+    # Empty disables link delivery (oversized files are then rejected).
+    download_link_base_url: str = ""
+    # Shared secret for nginx `secure_link` (MD5). Must match the value in the
+    # nginx secret include file. NEVER commit the real value.
+    download_link_secret: str = ""
+    # Directory served by nginx. Keep it on the SAME filesystem as TEMP_DIR so
+    # moving a finished file is an instant rename, not a multi-GB copy.
+    download_link_dir: str = "/srv/savevideo-links"
+    # How long a link stays valid.
+    download_link_ttl_hours: int = 6
+    # Per-user cap on concurrently active links.
+    download_link_max_active: int = 3
+    # Global cap on the total size of stored link files.
+    download_link_max_total_gb: float = 20.0
 
     # --- Localisation ---
     default_language: str = "en"
@@ -120,8 +140,6 @@ class Settings(BaseSettings):
     # Maximum number of yt-dlp downloads running at once (YouTube throttles
     # clients that request too much too quickly).
     yt_max_concurrency: int = 2
-    # Default height cap for "best" picks; the user can still choose higher.
-    max_video_height: int = 1080
 
     @field_validator("admin_ids", mode="before")
     @classmethod
@@ -175,6 +193,28 @@ class Settings(BaseSettings):
     @property
     def installs_local_api(self) -> bool:
         return self.local_api or bool(self.telegram_api_id)
+
+    @property
+    def download_link_enabled(self) -> bool:
+        """Link delivery needs a public base URL, a secret and a target dir."""
+        return bool(
+            self.download_link_base_url.strip() and self.download_link_secret and self.download_link_dir
+        )
+
+    @property
+    def download_link_ttl_s(self) -> int:
+        return max(1, int(self.download_link_ttl_hours)) * 3600
+
+    @property
+    def download_link_dir_resolved(self) -> Path:
+        p = Path(self.download_link_dir)
+        if not p.is_absolute():
+            p = PROJECT_ROOT / p
+        return p
+
+    @property
+    def min_free_disk_bytes(self) -> int:
+        return int(self.min_free_disk_gb * 1024**3)
 
     @property
     def data_dir(self) -> Path:

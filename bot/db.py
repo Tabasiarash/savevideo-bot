@@ -79,6 +79,23 @@ MIGRATIONS: dict[int, list[str]] = {
         "CREATE INDEX IF NOT EXISTS idx_downloads_site    ON downloads(site)",
         "CREATE INDEX IF NOT EXISTS idx_cache_created     ON cache(created_at)",
     ],
+    2: [
+        # Signed, expiring download links for media too large for the Bot API.
+        # Statements are idempotent so the migration can be re-run safely.
+        """
+        CREATE TABLE IF NOT EXISTS download_links (
+            token      TEXT PRIMARY KEY,
+            user_id    INTEGER NOT NULL,
+            filename   TEXT NOT NULL,
+            rel_path   TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_download_links_user    ON download_links(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_download_links_expires ON download_links(expires_at)",
+    ],
 }
 
 
@@ -328,6 +345,62 @@ class Database:
         assert self._conn is not None
         now = int(time.time())
         cur = await self._conn.execute("DELETE FROM deeplinks WHERE created_at < ?", (now - max_age_s,))
+        await self._conn.commit()
+        return int(cur.rowcount)
+
+    # -- download links (over-limit delivery) --------------------------------
+
+    async def download_link_create(
+        self,
+        *,
+        token: str,
+        user_id: int,
+        filename: str,
+        rel_path: str,
+        size_bytes: int,
+        created_at: int,
+        expires_at: int,
+    ) -> None:
+        await self._execute(
+            """
+            INSERT OR REPLACE INTO download_links
+                (token, user_id, filename, rel_path, size_bytes, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (token, user_id, filename, rel_path, size_bytes, created_at, expires_at),
+        )
+
+    async def download_link_get(self, token: str) -> aiosqlite.Row | None:
+        assert self._conn is not None
+        cur = await self._conn.execute("SELECT * FROM download_links WHERE token = ?", (token,))
+        return await cur.fetchone()
+
+    async def download_link_all(self) -> list[aiosqlite.Row]:
+        assert self._conn is not None
+        cur = await self._conn.execute("SELECT * FROM download_links")
+        return list(await cur.fetchall())
+
+    async def download_link_delete(self, token: str) -> None:
+        await self._execute("DELETE FROM download_links WHERE token = ?", (token,))
+
+    async def download_link_count_active(self, user_id: int, now: int) -> int:
+        assert self._conn is not None
+        cur = await self._conn.execute(
+            "SELECT COUNT(*) AS c FROM download_links WHERE user_id = ? AND expires_at > ?",
+            (user_id, now),
+        )
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def download_link_total_bytes(self) -> int:
+        assert self._conn is not None
+        cur = await self._conn.execute("SELECT COALESCE(SUM(size_bytes), 0) AS s FROM download_links")
+        row = await cur.fetchone()
+        return int(row["s"]) if row else 0
+
+    async def download_link_purge_expired(self, now: int) -> int:
+        assert self._conn is not None
+        cur = await self._conn.execute("DELETE FROM download_links WHERE expires_at <= ?", (now,))
         await self._conn.commit()
         return int(cur.rowcount)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -92,29 +93,54 @@ def sweep_stale_tmp(temp_dir: Path, max_age_s: int = 3600) -> None:
     now = time.time()
     for entry in temp_dir.iterdir():
         if entry.is_dir():
+            if _is_active_link(entry):
+                continue
             try:
                 if now - entry.stat().st_mtime > max_age_s:
-                    import shutil
-
                     shutil.rmtree(entry, ignore_errors=True)
                     log.info("swept stale temp dir %s", entry.name)
             except OSError:
                 continue
 
 
+def _is_active_link(entry: Path) -> bool:
+    """Never sweep a directory that a live download link points at."""
+    try:
+        link_root = settings.download_link_dir_resolved.resolve()
+        return link_root != Path("/") and entry.resolve().is_relative_to(link_root)
+    except (OSError, ValueError):
+        return False
+
+
+def _link_dir_warning() -> str | None:
+    """Warn when DOWNLOAD_LINK_DIR is not on the same filesystem as TEMP_DIR."""
+    if not settings.download_link_enabled:
+        return None
+    try:
+        temp_dev = settings.temp_dir_resolved.stat().st_dev
+        link_dev = settings.download_link_dir_resolved.stat().st_dev
+    except OSError:
+        return None
+    if temp_dev != link_dev:
+        return (
+            "DOWNLOAD_LINK_DIR is on a different filesystem than TEMP_DIR; "
+            "moving finished files will be a slow copy, not a rename"
+        )
+    return None
+
+
 async def _maintenance_loop(srv) -> None:
     while True:
-        await asyncio.sleep(6 * 3600)
+        await asyncio.sleep(3600)
         try:
             await srv.db.purge_deeplinks(24 * 3600)
             await srv.db.purge_cache_expired(settings.cache_ttl_s)
+            await srv.download_links.cleanup(srv.db)
         except Exception:  # noqa: BLE001
             log.warning("maintenance sweep failed", exc_info=True)
 
 
 def _log_environment() -> None:
-    import shutil
-
     import yt_dlp
 
     try:
@@ -123,8 +149,19 @@ def _log_environment() -> None:
         ytdlp_version = getattr(getattr(yt_dlp, "version", None), "VERSION", "unknown")
     log.info("yt-dlp %s", ytdlp_version)
     ffmpeg = shutil.which("ffmpeg")
-    log.info("ffmpeg %s", "available" if ffmpeg else "MISSING (re-encode/split disabled)")
+    log.info("ffmpeg %s", "available" if ffmpeg else "MISSING (merge/thumbnail disabled)")
     log.info("queue max_jobs=%s upload_limit=%sMB temp=%s db=%s", settings.max_jobs, settings.max_mb, settings.temp_dir_resolved, settings.db_path)
+    if settings.download_link_enabled:
+        log.info(
+            "download links enabled (dir=%s ttl=%sh max_active=%s max_total=%sGB)",
+            settings.download_link_dir_resolved,
+            settings.download_link_ttl_hours,
+            settings.download_link_max_active,
+            settings.download_link_max_total_gb,
+        )
+    warning = _link_dir_warning()
+    if warning:
+        log.warning("%s", warning)
 
 
 async def main() -> None:
@@ -135,6 +172,8 @@ async def main() -> None:
     srv = init_services(settings)
     settings.temp_dir_resolved.mkdir(parents=True, exist_ok=True)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    if settings.download_link_enabled:
+        settings.download_link_dir_resolved.mkdir(parents=True, exist_ok=True)
 
     bot = build_bot()
     srv.bot = bot
@@ -143,6 +182,8 @@ async def main() -> None:
     await srv.db.connect()
     await srv.db.purge_cache_expired(settings.cache_ttl_s)
     sweep_stale_tmp(settings.temp_dir_resolved)
+    with contextlib.suppress(Exception):
+        await srv.download_links.cleanup(srv.db)  # reconcile link files/rows at startup
     _log_environment()
 
     dp = build_dispatcher()

@@ -24,6 +24,7 @@ class Services:
     ratelimiter: object = field(default=None)
     cache: object = field(default=None)
     updater: object = field(default=None)
+    download_links: object = field(default=None)
     bot: object = field(default=None)  # assigned by main.py after bot creation
 
 
@@ -35,6 +36,7 @@ def init_services(settings: Settings) -> Services:
     if _services is not None:
         return _services
     from bot.services.cache import DownloadCache
+    from bot.services.download_links import DownloadLinkStore
     from bot.services.downloader import YtDlpRunner
     from bot.services.queue import JobQueue
     from bot.services.ratelimit import RateLimiter
@@ -49,6 +51,7 @@ def init_services(settings: Settings) -> Services:
         ratelimiter=RateLimiter(db, settings),
         cache=DownloadCache(db, settings),
         updater=Updater(),
+        download_links=DownloadLinkStore(settings),
     )
     return _services
 

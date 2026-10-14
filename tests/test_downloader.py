@@ -35,14 +35,8 @@ def test_format_args_video():
         "-f",
         "bv*[height<=720]+ba/b[height<=720]",
     ]
-    assert YtDlpRunner._format_args("video_best", None, None) == [
-        "-f",
-        "bv*[height<=1080]+ba/b[height<=1080]/b",
-    ]
-    assert YtDlpRunner._format_args("video_best", None, None, 720) == [
-        "-f",
-        "bv*[height<=720]+ba/b[height<=720]/b",
-    ]
+    # "Best" must never be capped: it is the highest quality available.
+    assert YtDlpRunner._format_args("video_best", None, None) == ["-f", "bv*+ba/b"]
 
 
 def test_format_args_audio():
@@ -125,12 +119,24 @@ def test_video_quality_rows_without_video_formats():
     assert video_quality_rows({"formats": [{"height": None, "vcodec": "none"}]}) == []
 
 
-def test_video_quality_rows_marks_too_large():
+def test_video_quality_rows_marks_over_limit():
     rows = video_quality_rows(INFO, prefix="dl", limit_bytes=15 * 1024 * 1024)
     by_key = {opts[0].key: opts[0] for opts in rows}
-    assert by_key["dl:video_480"].too_large is False  # ~12 MB
-    assert by_key["dl:video_720"].too_large is True  # ~22 MB
-    assert by_key["dl:video_best"].too_large is True  # ~42 MB
+    assert by_key["dl:video_480"].over_limit is False  # ~12 MB
+    assert by_key["dl:video_720"].over_limit is True  # ~22 MB
+    assert by_key["dl:video_best"].over_limit is True  # ~42 MB
+
+
+def test_video_quality_rows_lists_every_height_without_a_cap():
+    info = {
+        "duration": 60,
+        "formats": [
+            {"height": 2160, "vcodec": "vp9", "acodec": "none", "filesize": 900},
+            {"height": 1080, "vcodec": "avc1", "acodec": "none", "filesize": 400},
+        ],
+    }
+    rows = video_quality_rows(info, prefix="dl")
+    assert [r[0].key for r in rows] == ["dl:video_2160", "dl:video_1080", "dl:video_best"]
 
 
 async def test_download_adds_faststart_for_video(monkeypatch, tmp_path):
@@ -168,10 +174,9 @@ def test_best_estimate_uses_top_height():
     assert best_estimate(INFO) == 42_000_000
 
 
-def test_best_estimate_respects_cap():
-    assert best_estimate(INFO, 720) == 22_000_000
-    assert best_estimate(INFO, 480) == 12_000_000
-    assert best_estimate(INFO, 100) == 42_000_000  # nothing under cap -> all formats
+def test_best_estimate_without_video_heights():
+    info = {"duration": 60, "formats": [{"height": None, "vcodec": "avc1", "acodec": "mp4a", "filesize": 5_000_000}]}
+    assert best_estimate(info) == 5_000_000
 
 
 def test_helpers_on_real_paths(tmp_path):

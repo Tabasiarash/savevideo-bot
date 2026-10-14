@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from bot.handlers import links
 from bot.services.downloader import InfoError
@@ -193,70 +191,87 @@ async def test_download_error_is_shown(services, runner, bot, make_message, make
     assert await services.db.downloads_total() == 1
 
 
-async def test_upload_failure_recorded(services, runner, bot, make_message, make_callback):
+async def test_upload_failure_falls_back_to_link(services, runner, bot, make_message, make_callback):
     msg = make_message()
     await _open_flow(services, msg, runner)
     bot.raise_for.add(USER)
     cb = make_callback(data="dl:video_720", message=msg)
     await links.on_format_pick(cb, bot)
+    assert bot.videos == []
+    assert any("http://links.test/f/" in e for e in msg.edits)
+    assert await services.db.downloads_total() == 1
+
+
+async def test_blocked_chat_does_not_get_a_link(
+    services, runner, bot, make_message, make_callback, monkeypatch
+):
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+
+    async def forbidden(chat_id, file, **kwargs):
+        raise RuntimeError("Forbidden: bot was blocked by the user")
+
+    monkeypatch.setattr(bot, "send_video", forbidden)
+    cb = make_callback(data="dl:video_720", message=msg)
+    await links.on_format_pick(cb, bot)
     assert any("Upload failed" in e for e in msg.edits)
+    assert not any("http://links.test" in e for e in msg.edits)
 
 
-async def test_size_fallback_to_lower_height_then_reencode(
-    services, runner, make_message, monkeypatch
+async def test_over_limit_delivers_a_link(
+    services, runner, bot, make_message, make_callback, monkeypatch, settings
 ):
+    monkeypatch.setattr(settings, "max_upload_mb", 1, raising=False)
+    runner.media_size = 3 * 1024 * 1024
     msg = make_message()
-    flow = await _open_flow(services, msg, runner)
-    flow.video_heights = [720, 480]
-    runner.media_size = 5 * 1024 * 1024
-    limit = 1024 * 1024
-    big = flow.tmpdir / "media.mp4"
-    big.parent.mkdir(parents=True, exist_ok=True)
-    big.write_bytes(b"\x00" * runner.media_size)
-
-    async def fake_transcode(input_path, outdir, limit_bytes, duration_s, on_progress=None):
-        out = Path(outdir) / "fitsize.mp4"
-        out.write_bytes(b"\x00" * 100)
-        return out
-
-    monkeypatch.setattr(links, "transcode_to_size", fake_transcode)
-    result = await links._fit_video_size(services, flow, "video_720", [big], runner.media_size, limit)
-    assert result is not None
-    assert result[0].name == "fitsize.mp4"
-    assert [c.format_key for c in runner.calls if hasattr(c, "format_key")] == ["video_480"]
+    await _open_flow(services, msg, runner)
+    cb = make_callback(data="dl:video_720", message=msg)
+    await links.on_format_pick(cb, bot)
+    assert bot.videos == []
+    assert any("http://links.test/f/" in e for e in msg.edits)
+    assert await services.db.downloads_total() == 1
 
 
-async def test_size_fallback_impossible_gives_error(services, runner, make_message, monkeypatch):
-    msg = make_message()
-    flow = await _open_flow(services, msg, runner)
-    flow.video_heights = [720]
-    big = flow.tmpdir / "media.mp4"
-    big.parent.mkdir(parents=True, exist_ok=True)
-    big.write_bytes(b"\x00" * 5_000_000)
-
-    async def failing_transcode(*args, **kwargs):
-        raise RuntimeError("ffmpeg failed")
-
-    monkeypatch.setattr(links, "transcode_to_size", failing_transcode)
-    result = await links._fit_video_size(services, flow, "video_720", [big], 5_000_000, 1024)
-    assert result is None
-    assert any("cannot be made to fit" in e for e in msg.edits)
-
-
-async def test_oversized_estimate_is_rejected_before_download(
-    services, runner, bot, make_message, make_callback
+async def test_over_limit_without_links_reports_unavailable(
+    services, runner, bot, make_message, make_callback, monkeypatch, settings
 ):
+    monkeypatch.setattr(settings, "max_upload_mb", 1, raising=False)
+    monkeypatch.setattr(settings, "download_link_base_url", "", raising=False)
+    runner.media_size = 3 * 1024 * 1024
     msg = make_message()
+    await _open_flow(services, msg, runner)
+    cb = make_callback(data="dl:video_720", message=msg)
+    await links.on_format_pick(cb, bot)
+    assert any("not configured" in e for e in msg.edits)
+
+
+async def test_disk_low_blocks_download(
+    services, runner, bot, make_message, make_callback, monkeypatch, settings
+):
+    monkeypatch.setattr(settings, "min_free_disk_gb", 10**9, raising=False)
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    cb = make_callback(data="dl:video_720", message=msg)
+    await links.on_format_pick(cb, bot)
+    assert runner.calls == []
+    assert any("disk" in e.lower() for e in msg.edits)
+
+
+async def test_oversized_downloads_then_links(
+    services, runner, bot, make_message, make_callback, monkeypatch, settings
+):
+    monkeypatch.setattr(settings, "max_upload_mb", 1, raising=False)
     runner.info["formats"] = [
-        {"height": 1080, "vcodec": "avc1", "acodec": "none", "filesize": 500_000_000},
+        {"height": 1080, "vcodec": "avc1", "acodec": "none", "filesize": 5_000_000},
         {"height": None, "vcodec": "none", "acodec": "mp4a", "filesize": 2_000_000},
     ]
+    runner.media_size = 5_000_000
+    msg = make_message()
     await links.handle_urls(msg, ["https://www.youtube.com/watch?v=abc123"], playlist=False)
     cb = make_callback(data="dl:video_best", message=msg)
     await links.on_format_pick(cb, bot)
-    assert runner.calls == []
-    assert USER not in links._pending
-    assert any("upload limit" in e for e in msg.edits)
+    assert len(runner.calls) == 1
+    assert any("http://links.test/f/" in e for e in msg.edits)
 
 
 async def test_fitting_estimate_still_downloads(services, runner, bot, make_message, make_callback):
@@ -266,39 +281,6 @@ async def test_fitting_estimate_still_downloads(services, runner, bot, make_mess
     cb = make_callback(data="dl:video_480", message=msg)
     await links.on_format_pick(cb, bot)
     assert len(runner.calls) == 1
-
-
-async def test_audio_oversize_without_split_gives_error(services, runner, make_message, monkeypatch):
-    msg = make_message()
-    flow = await _open_flow(services, msg, runner)
-    big = flow.tmpdir / "media.mp3"
-    big.parent.mkdir(parents=True, exist_ok=True)
-    big.write_bytes(b"\x00" * 5_000_000)
-
-    async def failing_audio_transcode(*args, **kwargs):
-        raise RuntimeError("no")
-
-    monkeypatch.setattr(links, "transcode_audio_to_size", failing_audio_transcode)
-    result = await links._fit_audio_size(services, flow, [big], 5_000_000, 1024)
-    assert result is None
-    assert any("cannot be made to fit" in e for e in msg.edits)
-
-
-async def test_multi_part_audio_upload(services, runner, bot, make_message, make_callback, monkeypatch):
-    msg = make_message()
-    await _open_flow(services, msg, runner)
-    runner.media_size = 5 * 1024 * 1024
-
-    async def fake_transcode_audio(input_path, outdir, limit_bytes, duration_s, on_progress=None):
-        out = Path(outdir) / "small.mp3"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"\x00" * 100)
-        return out
-
-    monkeypatch.setattr(links, "transcode_audio_to_size", fake_transcode_audio)
-    cb = make_callback(data="dl:audio_mp3", message=msg)
-    await links.on_format_pick(cb, bot)
-    assert len(bot.audios) == 1
 
 
 async def test_gallery_download(services, runner, bot, make_message, make_callback):
@@ -354,16 +336,6 @@ async def test_extract_retries_after_ytdlp_update(services, runner, monkeypatch,
     assert result == runner.info
     assert calls["n"] == 2
     assert services.updater.updates == 1
-
-
-def test_next_lower_height():
-    class Flow:
-        video_heights = [1080, 720, 480]
-
-    assert links._next_lower_height(Flow, 1080) == 720
-    assert links._next_lower_height(Flow, 480) is None
-    assert links._next_lower_height(Flow, None) == 1080
-    assert links._next_lower_height(Flow, 123) == 1080
 
 
 @pytest.mark.parametrize("fmt,expected", [("video_720", 720), ("video_best", None), ("audio_mp3", None)])

@@ -319,14 +319,6 @@ def sanitize_filename(name: str, max_len: int = 180) -> str:
     return cleaned[:max_len].rstrip(". ")
 
 
-def target_bitrate_bps(size_limit_bytes: int, duration_s: float) -> int:
-    """Bitrate (bits/s) so the container stays under ``size_limit_bytes``."""
-    if duration_s <= 0:
-        return 0
-    # ~5% container overhead / muxing allowance.
-    return int(size_limit_bytes * 8 * 0.95 / duration_s)
-
-
 # Keep headroom below the Bot API limit: container/muxing overhead and the gap
 # between estimated and actual sizes mean a file at exactly the limit can still
 # be rejected by Telegram.

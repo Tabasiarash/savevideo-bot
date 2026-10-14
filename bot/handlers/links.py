@@ -1,8 +1,9 @@
 """Core link flow: URL detection → info → format picker → download → upload.
 
-Also implements deep-link starts, playlist mode, media-groups for multi-item
-posts and the size-limit fallback chain (lower quality → ffmpeg re-encode →
-clear error).
+Also implements deep-link starts, playlist mode and media-groups for multi-item
+posts. Any file over the Bot API limit (or that fails to upload) is kept on disk
+and delivered as a signed, expiring download link instead of being split or
+re-encoded.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
@@ -32,17 +34,15 @@ from bot.db import url_hash
 from bot.deps import get_services
 from bot.handlers.common import is_banned, register_user, text
 from bot.i18n import get_text, language_code_to_code
+from bot.services.download_links import LinkError
 from bot.services.downloader import (
     DownloadError,
     DownloadJob,
     InfoError,
     YtDlpError,
-    best_estimate,
     cleanup_dir,
-    estimate_format_size,
+    disk_free_bytes,
     probe_media,
-    transcode_audio_to_size,
-    transcode_to_size,
     video_quality_rows,
 )
 from bot.utils import (
@@ -51,7 +51,6 @@ from bot.utils import (
     check_url_safety,
     extract_urls,
     format_duration,
-    format_size,
     normalize_url,
     sanitize_filename,
     site_from_url,
@@ -78,7 +77,6 @@ class PendingFlow:
     uploader: str
     prefix: str
     playlist_items: str | None
-    video_heights: list[int]
     lang: str
     status_message: Message | None
 
@@ -201,7 +199,6 @@ async def handle_urls(message: Message, urls: list[str], playlist: bool) -> None
         uploader=str(info.get("uploader") or info.get("channel") or ""),
         prefix="pl" if playlist else "dl",
         playlist_items="1-10" if playlist else None,
-        video_heights=_heights_from(info),
         lang=lang,
         status_message=status_message,
     )
@@ -292,14 +289,11 @@ async def _send_thumbnail(callback: CallbackQuery, bot: Bot, flow: PendingFlow, 
 # Download orchestration
 # --------------------------------------------------------------------------
 
-def _estimate_selected(flow: PendingFlow, fmt: str) -> int | None:
-    """Estimated download size for the chosen format, when it can be known."""
-    if fmt == "video_best":
-        return best_estimate(flow.info, settings.max_video_height)
-    if fmt.startswith("video_"):
-        height = _height_of(fmt)
-        return estimate_format_size(flow.info, height) if height else None
-    return None
+def _min_free_ok() -> bool:
+    try:
+        return disk_free_bytes(settings.temp_dir_resolved) >= settings.min_free_disk_bytes
+    except OSError:
+        return True
 
 
 async def _run_download(callback: CallbackQuery, bot: Bot, flow: PendingFlow, fmt: str) -> None:
@@ -307,20 +301,8 @@ async def _run_download(callback: CallbackQuery, bot: Bot, flow: PendingFlow, fm
     user_id = callback.from_user.id
     lang = flow.lang
 
-    estimate = _estimate_selected(flow, fmt)
-    if estimate is not None and not settings.fits_upload_limit(estimate):
-        await _edit(
-            message=flow.status_message,
-            body=text(
-                lang,
-                "too_large_estimate",
-                size=format_size(estimate),
-                limit=settings.max_mb,
-            ),
-        )
-        await _record(
-            srv.db, user_id, flow.url, flow.url_site, fmt, "error", "too_large", estimate, flow.duration
-        )
+    if not _min_free_ok():
+        await _edit(message=flow.status_message, body=text(lang, "disk_low"))
         _cleanup_pending(flow)
         cleanup_dir(flow.tmpdir)
         return
@@ -363,7 +345,6 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
 
     try:
         paths = await _run_download_job(srv, job, editor, write_thumbnail=fmt.startswith("video"))
-        sizes = [p.stat().st_size for p in _nonempty(paths)]
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
     except Exception as exc:  # noqa: BLE001 — yt-dlp raises many error types
@@ -371,33 +352,104 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
         _cleanup_pending(flow)
         return
 
-    total = sum(sizes)
-    limit = settings.upload_limit_bytes
     parts = _nonempty(paths)
-
-    if fmt.startswith("video"):
-        parts = await _fit_video_size(srv, flow, fmt, parts, total, limit)
-        if parts is None:
-            _cleanup_pending(flow)
-            return
-    elif fmt.startswith("audio") and total > limit:
-        parts = await _fit_audio_size(srv, flow, parts, total, limit)
-        if parts is None:
-            _cleanup_pending(flow)
-            return
-
     try:
-        if fmt.startswith("audio"):
-            await _upload_audio_flow(srv, bot, flow, parts, fmt, user_id, lang)
-        else:
-            await _upload_video_flow(srv, bot, flow, parts, fmt, user_id, lang)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("upload failed user_id=%s site=%s: %s", user_id, flow.url_site, exc)
-        await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "error", "telegram", total, flow.duration)
-        await _edit(message=flow.status_message, body=text(lang, "error_upload", error=str(exc)[:300]))
+        if not parts:
+            await _on_download_error(flow, user_id, DownloadError("no media produced"))
+            return
+        total = sum(p.stat().st_size for p in parts)
+        await _deliver(srv, bot, flow, parts, fmt, user_id, lang, total)
     finally:
         _cleanup_pending(flow)
         cleanup_dir(flow.tmpdir)
+
+
+async def _deliver(
+    srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str, total: int
+) -> None:
+    """Send as one Telegram message, or hand over a link when too large / failed."""
+    if not settings.fits_upload_limit(total):
+        await _send_links(srv, flow, parts, fmt, user_id, lang, total)
+        return
+
+    try:
+        await _upload_with_retry(srv, bot, flow, parts, fmt, user_id, lang)
+        return
+    except Exception as exc:  # noqa: BLE001
+        if _link_would_help(exc) and srv.download_links.enabled:
+            log.info("upload failed (%s); delivering a link instead", type(exc).__name__)
+            await _send_links(srv, flow, parts, fmt, user_id, lang, total)
+            return
+        log.warning("upload failed user_id=%s site=%s: %s", user_id, flow.url_site, exc)
+        await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "error", "telegram", total, flow.duration)
+        await _edit(message=flow.status_message, body=text(lang, "error_upload", error=str(exc)[:300]))
+
+
+async def _upload_with_retry(
+    srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str
+) -> None:
+    """Upload once; retry a single time on a transient error before giving up."""
+    try:
+        await _upload_once(srv, bot, flow, parts, fmt, user_id, lang)
+    except TelegramForbiddenError:
+        raise
+    except Exception:  # noqa: BLE001
+        await _upload_once(srv, bot, flow, parts, fmt, user_id, lang)
+
+
+async def _upload_once(
+    srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str
+) -> None:
+    if fmt.startswith("audio"):
+        await _upload_audio_flow(srv, bot, flow, parts, fmt, user_id, lang)
+    else:
+        await _upload_video_flow(srv, bot, flow, parts, fmt, user_id, lang)
+
+
+def _link_would_help(exc: Exception) -> bool:
+    """A download link only helps when the failure is not the user's own chat."""
+    if isinstance(exc, TelegramForbiddenError):
+        return False
+    lowered = str(exc).lower()
+    return not any(k in lowered for k in ("blocked", "chat not found", "deactivated", "kicked"))
+
+
+async def _send_links(
+    srv, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str, total: int
+) -> None:
+    store = srv.download_links
+    if not store.enabled:
+        await _edit(message=flow.status_message, body=text(lang, "link_unavailable", limit=settings.max_mb))
+        await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "error", "link_disabled", total, flow.duration)
+        return
+
+    results = []
+    for path in parts:
+        try:
+            results.append(await store.create(srv.db, source=path, user_id=user_id, title=flow.title))
+        except LinkError as exc:
+            await _edit(message=flow.status_message, body=_link_error_text(lang, exc))
+            await _record(
+                srv.db, user_id, flow.url, flow.url_site, fmt, "error", f"link_{exc.reason}", total, flow.duration
+            )
+            return
+
+    body = "\n\n".join(
+        text(lang, "link_ready", limit=settings.max_mb, hours=settings.download_link_ttl_hours, url=r.url)
+        for r in results
+    )
+    await _edit(message=flow.status_message, body=body)
+    for result in results:
+        await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "link", None, result.size_bytes, flow.duration)
+    await srv.db.touch_user(user_id)
+
+
+def _link_error_text(lang: str, exc: LinkError) -> str:
+    if exc.reason == "quota_user":
+        return text(lang, "link_quota_user", max=settings.download_link_max_active)
+    if exc.reason == "quota_total":
+        return text(lang, "link_quota_total")
+    return text(lang, "link_failed")
 
 
 async def _run_download_job(srv, job: DownloadJob, editor: _ProgressEditor, write_thumbnail: bool) -> list[Path]:
@@ -419,80 +471,9 @@ async def _run_download_job(srv, job: DownloadJob, editor: _ProgressEditor, writ
             raise
 
 
-async def _fit_video_size(
-    srv, flow: PendingFlow, fmt: str, parts: list[Path], total: int, limit: int
-) -> list[Path] | None:
-    """Fallback chain: next lower height → ffmpeg re-encode → clear error."""
-    lang = flow.lang
-    current = parts[0]
-    current_size = total
-    current_fmt = fmt
-    current_height = _height_of(fmt)
-
-    while current_size > limit:
-        if current_fmt.startswith("video") and current_height:
-            next_h = _next_lower_height(flow, current_height)
-            if next_h is not None:
-                await _edit(message=flow.status_message, body=text(lang, "file_too_large_fallback"))
-                job = DownloadJob(
-                    url=flow.url,
-                    format_key=f"video_{next_h}",
-                    tmpdir=flow.tmpdir,
-                    title_hint=sanitize_filename(flow.title) or "media",
-                    height=next_h,
-                )
-                editor = _ProgressEditor(flow)
-                try:
-                    paths = await _run_download_job(srv, job, editor, write_thumbnail=True)
-                except YtDlpError:
-                    break
-                parts = _nonempty(paths)
-                if not parts:
-                    break
-                current = parts[0]
-                current_size = sum(p.stat().st_size for p in parts)
-                current_height = next_h
-                continue
-
-        await _edit(message=flow.status_message, body=text(lang, "reencoded", size=format_size(limit)))
-        try:
-            outdir = flow.tmpdir / "fitsize"
-            outdir.mkdir(parents=True, exist_ok=True)
-            encoded = await transcode_to_size(current, outdir, limit, flow.duration or 60.0)
-            return [encoded]
-        except Exception as exc:  # noqa: BLE001
-            log.warning("ffmpeg re-encode failed: %s", exc)
-            break
-
-    if current_size > limit:
-        await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
-        await _record(srv.db, 0, flow.url, flow.url_site, fmt, "error", "too_large", current_size, flow.duration)
-        return None
-    return parts
-
-
-async def _fit_audio_size(srv, flow: PendingFlow, parts: list[Path], total: int, limit: int) -> list[Path] | None:
-    lang = flow.lang
-    current = parts[0]
-    await _edit(message=flow.status_message, body=text(lang, "reencoded", size=format_size(limit)))
-    try:
-        outdir = flow.tmpdir / "fitsize"
-        outdir.mkdir(parents=True, exist_ok=True)
-        encoded = await transcode_audio_to_size(current, outdir, limit, flow.duration or 60.0)
-        if encoded.stat().st_size <= limit:
-            return [encoded]
-    except Exception as exc:  # noqa: BLE001
-        log.warning("audio re-encode failed: %s", exc)
-
-    await _edit(message=flow.status_message, body=text(lang, "too_large_impossible", limit=settings.max_mb))
-    return None
-
-
 async def _upload_video_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str) -> None:
     chat_id = flow.status_message.chat.id if flow.status_message else user_id
-    for index, path in enumerate(parts, start=1):
-        if len(parts) > 1:
-            await _edit(message=flow.status_message, body=text(lang, "sending_part", part=index, total=len(parts)))
+    for path in parts:
         media = await probe_media(path)
         thumb = _find_thumbnail(flow.tmpdir)
         kwargs: dict[str, Any] = {
@@ -521,9 +502,7 @@ async def _upload_video_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path]
 
 async def _upload_audio_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str) -> None:
     chat_id = flow.status_message.chat.id if flow.status_message else user_id
-    for index, path in enumerate(parts, start=1):
-        if len(parts) > 1:
-            await _edit(message=flow.status_message, body=text(lang, "sending_part", part=index, total=len(parts)))
+    for path in parts:
         media = await probe_media(path)
         sent = await bot.send_audio(
             chat_id,
@@ -673,17 +652,6 @@ def _is_gallery(flow: PendingFlow) -> bool:
     return flow.url_site in _GALLERY_SITES and len(entries) > 1
 
 
-def _heights_from(info: dict[str, Any]) -> list[int]:
-    return sorted(
-        {
-            int(f["height"])
-            for f in info.get("formats") or []
-            if f.get("height") and f.get("vcodec") and f.get("vcodec") != "none"
-        },
-        reverse=True,
-    )
-
-
 def _height_of(fmt: str) -> int | None:
     if fmt.startswith("video_"):
         try:
@@ -691,20 +659,6 @@ def _height_of(fmt: str) -> int | None:
         except ValueError:
             return None
     return None
-
-
-def _next_lower_height(flow: PendingFlow, height: int | None) -> int | None:
-    heights = flow.video_heights
-    if not heights:
-        return None
-    if height is None:
-        return heights[0]
-    if height not in heights:
-        return heights[0]
-    idx = heights.index(height)
-    if idx >= len(heights) - 1:
-        return None
-    return heights[idx + 1]
 
 
 def _width_of(flow: PendingFlow) -> int | None:
@@ -741,17 +695,16 @@ def _choose_text(flow: PendingFlow) -> str:
 
 def _build_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    marker = text(flow.lang, "too_large_marker")
+    marker = text(flow.lang, "link_marker")
     for quality_row in video_quality_rows(
         flow.info,
         prefix=flow.prefix,
         limit_bytes=settings.upload_limit_bytes,
-        max_height=settings.max_video_height,
     ):
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=option.label + (marker if option.too_large else ""),
+                    text=option.label + (marker if option.over_limit else ""),
                     callback_data=option.key,
                 )
                 for option in quality_row

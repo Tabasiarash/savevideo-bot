@@ -309,9 +309,7 @@ class YtDlpRunner:
         if job.format_key.startswith("video"):
             # Put the moov atom first so uploads/seeking are efficient.
             args += ["--postprocessor-args", "Merger:-movflags +faststart"]
-        args += self._format_args(
-            job.format_key, job.height, job.audio_codec, self.settings.max_video_height
-        )
+        args += self._format_args(job.format_key, job.height, job.audio_codec)
         if write_thumbnail:
             args += ["--write-thumbnail", "--convert-thumbnails", "jpg"]
         args.append(job.url)
@@ -333,11 +331,10 @@ class YtDlpRunner:
         format_key: str,
         height: int | None,
         audio_codec: str | None,
-        max_height: int | None = None,
     ) -> list[str]:
         if format_key == "video_best":
-            cap = max_height or 1080
-            return ["-f", f"bv*[height<={cap}]+ba/b[height<={cap}]/b"]
+            # No height cap: "Best" always means the highest quality available.
+            return ["-f", "bv*+ba/b"]
         if format_key.startswith("video_"):
             spec = f"bv*[height<={height}]+ba/b[height<={height}]" if height else "bv*+ba/b"
             return ["-f", spec]
@@ -564,107 +561,6 @@ def _collect_media_files(tmpdir: Path) -> list[Path]:
     return sorted(media, key=lambda p: p.stat().st_size, reverse=True)
 
 
-def ffmpeg_binary() -> str:
-    return shutil.which("ffmpeg") or "ffmpeg"
-
-
-async def transcode_to_size(
-    input_path: Path,
-    outdir: Path,
-    limit_bytes: int,
-    duration_s: float,
-    on_progress: ProgressCallback | None = None,
-) -> Path:
-    """Re-encode ``input_path`` so the output fits ``limit_bytes`` using libx264.
-
-    Returns the new file path. Raises :class:`DownloadError` if it cannot be
-    made to fit (bitrate floor impossible).
-    """
-    from bot.utils import format_size, target_bitrate_bps
-
-    video_bps = target_bitrate_bps(limit_bytes, duration_s) - 128_000  # 128 kbps audio
-    if video_bps <= 80_000:
-        raise DownloadError(f"cannot fit {format_size(input_path.stat().st_size)} into the upload limit")
-
-    out = outdir / f"{input_path.stem}_fitsize.mp4"
-    ffmpeg = ffmpeg_binary()
-    args = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(input_path),
-        "-map",
-        "0:v:0",
-        "-map",
-        "0:a:0",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-b:v",
-        str(int(video_bps)),
-        "-maxrate",
-        str(int(video_bps * 1.1)),
-        "-bufsize",
-        str(int(video_bps * 2)),
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-movflags",
-        "+faststart",
-        str(out),
-    ]
-    process = await asyncio.create_subprocess_exec(
-        *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.STDOUT
-    )
-    if on_progress:
-        await on_progress(0.0, 0, 0)
-    await process.wait()
-    if process.returncode != 0 or not out.exists():
-        raise DownloadError("re-encode with ffmpeg failed")
-    return out
-
-
-async def transcode_audio_to_size(
-    input_path: Path,
-    outdir: Path,
-    limit_bytes: int,
-    duration_s: float,
-    on_progress: ProgressCallback | None = None,
-) -> Path:
-    """Re-encode audio to the max bitrate that fits ``limit_bytes``."""
-    from bot.utils import format_size, target_bitrate_bps
-
-    audio_bps = int(target_bitrate_bps(limit_bytes, duration_s) * 0.9)
-    if audio_bps < 32_000:
-        raise DownloadError(f"audio too long to fit {format_size(limit_bytes)}")
-
-    out = outdir / f"{input_path.stem}_fitsize.mp3"
-    ffmpeg = ffmpeg_binary()
-    args = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(input_path),
-        "-vn",
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        str(audio_bps),
-        str(out),
-    ]
-    process = await asyncio.create_subprocess_exec(
-        *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.STDOUT
-    )
-    if on_progress:
-        await on_progress(0.0, 0, 0)
-    await process.wait()
-    if process.returncode != 0 or not out.exists():
-        raise DownloadError("audio re-encode with ffmpeg failed")
-    return out
-
-
 async def probe_duration(path: Path) -> float:
     """Best-effort duration via ffprobe (off the event loop)."""
     ffprobe = shutil.which("ffprobe")
@@ -768,7 +664,7 @@ class FormatOption:
     label: str
     size_bytes: int | None = None
     height: int | None = None
-    too_large: bool = False
+    over_limit: bool = False
 
 
 def _option_size(info: dict[str, Any], fmt: dict[str, Any]) -> int | None:
@@ -811,21 +707,10 @@ def estimate_format_size(info: dict[str, Any], height: int) -> int | None:
     return video_size + audio_size
 
 
-def best_estimate(info: dict[str, Any], max_height: int | None = None) -> int | None:
-    """Size estimate for the "Best" option (top height merged with best audio).
-
-    When ``max_height`` is given the estimate reflects the capped default
-    download, ignoring formats above the cap (falling back to all formats if the
-    cap would leave nothing available).
-    """
+def best_estimate(info: dict[str, Any]) -> int | None:
+    """Size estimate for the "Best" option (highest height merged with best audio)."""
     formats = info.get("formats") or []
-    heights = [
-        f["height"]
-        for f in formats
-        if f.get("height") and (not max_height or f["height"] <= max_height)
-    ]
-    if not heights and max_height:
-        heights = [f["height"] for f in formats if f.get("height")]
+    heights = [f["height"] for f in formats if f.get("height")]
     height = max(heights, default=0)
     if not height:
         sizes = []
@@ -841,18 +726,14 @@ def best_estimate(info: dict[str, Any], max_height: int | None = None) -> int | 
 def video_quality_rows(
     info: dict[str, Any],
     prefix: str = "dl",
-    max_heights: int = 6,
     limit_bytes: int | None = None,
-    max_height: int | None = None,
 ) -> list[list[FormatOption]]:
     """Build rows of video quality buttons from a real yt-dlp info dict.
 
-    Heights are gathered from actual formats, deduplicated, capped at
-    ``max_heights`` (spread evenly), followed by a "Best" entry. When
-    ``limit_bytes`` is given, options whose estimate exceeds the limit are
-    flagged as ``too_large`` so the caller can mark them. ``max_height`` caps
-    the default "Best" download (and its estimate) without hiding the explicit
-    higher-quality choices.
+    Every distinct height is listed (no cap, no spreading) followed by a "Best"
+    entry for the highest quality. When ``limit_bytes`` is given, options whose
+    estimate exceeds the limit are flagged ``over_limit`` so the caller can mark
+    them for link delivery — they are never hidden or filtered out.
     """
     from bot.utils import fits_upload_limit, format_size
 
@@ -867,20 +748,11 @@ def video_quality_rows(
     if not heights:
         return []
 
-    spread = list(range(0, len(heights), max(1, len(heights) // max_heights)))
-    if len(heights) <= max_heights:
-        picked = heights
-    else:
-        picked = [heights[max(min(i, len(heights) - 1), 0)] for i in spread]
-        if heights[0] not in picked:
-            picked = [heights[0]] + picked[:-1]
-    picked = sorted(set(picked), reverse=True)
-
-    def _too_large(size: int | None) -> bool:
+    def _over_limit(size: int | None) -> bool:
         return bool(size and limit_bytes and not fits_upload_limit(size, limit_bytes))
 
     rows: list[list[FormatOption]] = []
-    for h in picked:
+    for h in heights:
         size = estimate_format_size(info, h)
         label = f"{h}p"
         if size:
@@ -892,12 +764,12 @@ def video_quality_rows(
                     label=label,
                     size_bytes=size,
                     height=h,
-                    too_large=_too_large(size),
+                    over_limit=_over_limit(size),
                 )
             ]
         )
 
-    best_size = best_estimate(info, max_height)
+    best_size = best_estimate(info)
     best_label = "Best"
     if best_size:
         best_label += f" · {format_size(best_size)}"
@@ -907,7 +779,7 @@ def video_quality_rows(
                 key=f"{prefix}:video_best",
                 label=best_label,
                 size_bytes=best_size,
-                too_large=_too_large(best_size),
+                over_limit=_over_limit(best_size),
             )
         ]
     )

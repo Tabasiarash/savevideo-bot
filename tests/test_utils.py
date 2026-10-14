@@ -15,7 +15,6 @@ from bot.utils import (
     normalize_url,
     sanitize_filename,
     site_from_url,
-    target_bitrate_bps,
 )
 
 # --- extraction -----------------------------------------------------------
@@ -140,12 +139,6 @@ def test_sanitize_filename():
     assert sanitize_filename("   ..trim..  ") == "trim"
     assert sanitize_filename("") == "download"
     assert len(sanitize_filename("x" * 500)) == 180
-
-
-def test_target_bitrate_bps():
-    assert target_bitrate_bps(0, 10) == 0
-    assert target_bitrate_bps(1000, 0) == 0
-    assert target_bitrate_bps(8_000_000, 8) == int(8_000_000 * 8 * 0.95 / 8)
 
 
 def test_fits_upload_limit_applies_margin():

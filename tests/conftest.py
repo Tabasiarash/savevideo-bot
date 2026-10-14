@@ -16,6 +16,7 @@ from bot.config import settings as real_settings
 from bot.db import Database
 from bot.deps import Services
 from bot.services.cache import DownloadCache
+from bot.services.download_links import DownloadLinkStore
 from bot.services.queue import JobQueue
 from bot.services.ratelimit import RateLimiter
 
@@ -221,6 +222,13 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setattr(real_settings, "force_ipv4", False, raising=False)
     monkeypatch.setattr(real_settings, "force_ipv6", False, raising=False)
     monkeypatch.setattr(real_settings, "js_runtime", "auto", raising=False)
+    monkeypatch.setattr(real_settings, "min_free_disk_gb", 0.0, raising=False)
+    monkeypatch.setattr(real_settings, "download_link_base_url", "http://links.test", raising=False)
+    monkeypatch.setattr(real_settings, "download_link_secret", "testsecret", raising=False)
+    monkeypatch.setattr(real_settings, "download_link_dir", str(tmp_path / "links"), raising=False)
+    monkeypatch.setattr(real_settings, "download_link_ttl_hours", 6, raising=False)
+    monkeypatch.setattr(real_settings, "download_link_max_active", 3, raising=False)
+    monkeypatch.setattr(real_settings, "download_link_max_total_gb", 20.0, raising=False)
     (tmp_path / "tmp").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     return real_settings
@@ -256,6 +264,7 @@ def services(settings, db, runner, bot):
         ratelimiter=RateLimiter(db, settings),
         cache=DownloadCache(db, settings),
         updater=FakeUpdaterWithRetry(retry=False),
+        download_links=DownloadLinkStore(settings),
         bot=bot,
     )
     deps._services = srv
