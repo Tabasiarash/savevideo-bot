@@ -15,10 +15,11 @@ are cached by Telegram `file_id`, so repeat downloads are instant.
   **thumbnail** downloads.
 - 🧮 **Real size estimates** per quality in the picker, built from the actual
   yt-dlp formats.
-- 🪜 **Upload-limit resilience**: if a file is too big for your Bot API the bot
-  automatically tries a lower quality and re-encodes with ffmpeg to fit it, and
-  only then reports a clear error. Oversized media is flagged in the picker
-  beforehand — it is never split into parts.
+- 🪜 **Upload-limit resilience**: files larger than your Bot API limit are never
+  split or re-encoded. The bot keeps the finished file and returns a signed,
+  expiring **download link** (nginx `secure_link`); if links are not configured
+  it reports a clear error. Oversized options are flagged in the picker
+  beforehand.
 - 📦 **Large files**: run a local Bot API server to send up to **2000 MB** as a
   single file (`BOT_API_URL`, see [Large files](#large-files-local-bot-api)).
 - ⚡ **Instant cache**: a URL+format → `file_id` cache in SQLite (no re-download
@@ -105,7 +106,13 @@ option has a safe default and the bot degrades gracefully.
 | `BOT_API_DATA_DIR` | `/var/lib/telegram-bot-api` | Data volume of the local server (free space shown in `/health`). |
 | `UPLOAD_TIMEOUT_SECONDS` | `3600` | Upload timeout; large files via a local server take a while. |
 | `YT_MAX_CONCURRENCY` | `2` | Max concurrent yt-dlp downloads. |
-| `MAX_VIDEO_HEIGHT` | `1080` | Default height cap for `best` unless the user picks higher. |
+| `DOWNLOAD_LINK_BASE_URL` | *(empty)* | Public origin serving `DOWNLOAD_LINK_DIR`. Links stay disabled until set. |
+| `DOWNLOAD_LINK_SECRET` | *(empty)* | Shared secret; must match nginx `secure_link_md5`. |
+| `DOWNLOAD_LINK_DIR` | `/srv/savevideo-links` | Finished over-limit files (same filesystem as `TEMP_DIR`). |
+| `DOWNLOAD_LINK_TTL_HOURS` | `6` | Link validity. |
+| `DOWNLOAD_LINK_MAX_ACTIVE` | `3` | Max active links per user. |
+| `DOWNLOAD_LINK_MAX_TOTAL_GB` | `20` | Global cap for all stored links. |
+| `MIN_FREE_DISK_GB` | `5` | Refuse a download when free space is below this. |
 | `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | *(empty)* | Credentials for the local server. |
 | `MAX_JOBS` | `2` | Concurrent downloads. |
 | `PER_USER_DAILY_LIMIT` | `30` | Downloads per user per UTC day. |
@@ -133,6 +140,11 @@ option has a safe default and the bot degrades gracefully.
 The public Bot API limits uploads to 50 MB. To raise this to 2000 MB, run a
 [self-hosted Bot API server](https://github.com/tdlib/telegram-bot-api). Files
 are always sent as a **single message** — the bot never splits them.
+
+Anything still too large (or any upload that fails for a reason a link can fix)
+is delivered as a **signed, expiring download link** instead, served by nginx.
+See [deploy/download-links](deploy/download-links/README.md) for the nginx
+`secure_link` setup (including the token formula the bot must agree on).
 
 1. Get `api_id` / `api_hash` from <https://my.telegram.org>.
 2. Set in `.env`:
@@ -245,9 +257,10 @@ Telegram ── aiogram 3 ──► handlers ──► JobQueue ──► YtDlpR
                                         │                 │
                                         │                 ▼
                                         ▼            yt-dlp download
-                                   SQLite cache  ──► ffmpeg re-encode to fit
+                                   SQLite cache  ──► upload (video/audio)
                                         │                 │
-                                        └────► upload (video/audio) ──► cache file_id
+                                        │                 ▼ too large / failed
+                                        └────► signed download link (nginx)
 ```
 
 - **Subprocess yt-dlp** (`python -m yt_dlp …`) so hung jobs can be killed on

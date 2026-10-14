@@ -125,7 +125,7 @@ done
 info "using interpreter: $PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
 
 "$PYTHON_BIN" -c 'import venv' 2>/dev/null || warn "python venv module missing — install python3-venv"
-need ffmpeg || warn "ffmpeg not found — media re-encoding/splitting will be unavailable"
+need ffmpeg || warn "ffmpeg not found — video+audio merging and thumbnails will be unavailable"
 
 # ---- existing config -------------------------------------------------------
 ENV_FILE="$SCRIPT_DIR/.env"
@@ -239,10 +239,19 @@ TELEGRAM_API_HASH=$TELEGRAM_API_HASH
 
 MAX_JOBS=2
 YT_MAX_CONCURRENCY=2
-MAX_VIDEO_HEIGHT=1080
 PER_USER_DAILY_LIMIT=30
 COOLDOWN_SECONDS=3
 MAX_DURATION_MIN=60
+
+# Over-limit files become signed download links (see deploy/download-links).
+# Disabled until DOWNLOAD_LINK_BASE_URL and DOWNLOAD_LINK_SECRET are set.
+DOWNLOAD_LINK_BASE_URL=
+DOWNLOAD_LINK_SECRET=
+DOWNLOAD_LINK_DIR=/srv/savevideo-links
+DOWNLOAD_LINK_TTL_HOURS=6
+DOWNLOAD_LINK_MAX_ACTIVE=3
+DOWNLOAD_LINK_MAX_TOTAL_GB=20
+MIN_FREE_DISK_GB=5
 
 INFO_TIMEOUT=30
 DOWNLOAD_TIMEOUT=600

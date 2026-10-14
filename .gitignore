@@ -22,6 +22,10 @@ cookies/*
 *.db
 *.sqlite3
 
+# Signed-download-link state (nginx secret include + served files)
+savevideo-link-secret.conf
+savevideo-links/
+
 # Logs / OS
 *.log
 .DS_Store

@@ -17,6 +17,11 @@
 # Optional cookies for age/region restricted videos:
 #   place a Netscape cookies.txt at ./cookies/cookies.txt and set
 #   COOKIES_FILE=/cookies/cookies.txt in .env (mounted read-only below).
+#
+# Oversized files -> signed download links (nginx secure_link):
+#   set DOWNLOAD_LINK_BASE_URL and DOWNLOAD_LINK_SECRET in .env, then serve the
+#   bot-links volume with nginx (see deploy/download-links/). Files land on the
+#   same volume as TEMP_DIR so moving them into place is an instant rename.
 
 services:
   bot:
@@ -26,6 +31,7 @@ services:
     environment:
       DB_PATH: /data/savevideo.db
       TEMP_DIR: /tmp/savevideo
+      DOWNLOAD_LINK_DIR: /tmp/savevideo/links
       # Point the bundled bgutil plugin at the pot-provider sidecar (below).
       YTDLP_EXTRA_ARGS: >-
         --extractor-args youtubepot-bgutilhttp:base_url=http://bgutil:4416

@@ -1,16 +1,17 @@
-# Migration runbook: splitting → local Bot API
+# Migration runbook: splitting → single messages + download links
 
-This runbook moves a running **savevideo-bot** install from the old behaviour
-(public Bot API + splitting oversized files into parts) to the new behaviour:
+This runbook moves a running **savevideo-bot** install away from the old
+behaviour (public Bot API + splitting oversized files into parts):
 
-- oversized media is **never split**; it is either accepted whole (<= the Bot
-  API limit) or rejected with a clear "too large" message;
+- oversized media is **never split or re-encoded**; it is either accepted whole
+  (<= the Bot API limit) or delivered as a **signed, expiring download link**;
 - uploads up to **2000 MB** via a self-hosted **local Bot API** server;
 - hardened yt-dlp egress (proxy, retries, JS runtime, `/health` diagnostics).
 
-The steps are safe to run at any time; the bot keeps working on the public API
-until you explicitly switch (step 5). Work is done **locally** in small commits;
-this document is the operational runbook.
+The phases are independent: ship the download-link change first (it works even
+behind the 50 MB cloud API), then move to a local Bot API server if you want
+native >50 MB uploads. Work is done **locally** in small commits; this document
+is the operational runbook.
 
 ## Prerequisites
 
@@ -65,6 +66,23 @@ MAX_UPLOAD_MB=2000
 `MAX_UPLOAD_MB` is clamped to 2000. The legacy `LOCAL_API`/`LOCAL_API_BASE` and
 `MAX_MB` names still work, so an old `.env` keeps starting — but prefer the new
 names.
+
+## Download links (optional, works without a local server)
+
+Files over the upload limit become signed links instead of being split. This
+needs nginx (or any server that can compute nginx's `secure_link` MD5 token) and
+three settings:
+
+```env
+DOWNLOAD_LINK_BASE_URL=https://dl.example.com
+DOWNLOAD_LINK_SECRET=<same value as nginx secure_link_md5>
+DOWNLOAD_LINK_DIR=/srv/savevideo-links          # same filesystem as TEMP_DIR
+```
+
+See [../deploy/download-links/README.md](../deploy/download-links/README.md) for
+the nginx `secure_link` config, the exact token formula, and a `curl` test. The
+feature stays disabled until `DOWNLOAD_LINK_BASE_URL` and
+`DOWNLOAD_LINK_SECRET` are set, so it is safe to leave blank.
 
 ## 4. Log the bot out of the cloud API (one time)
 
@@ -122,10 +140,11 @@ are untouched by the migration, so cached files keep working.
 
 | Area | Before | After |
 | --- | --- | --- |
-| Oversized media | split into parts | rejected with a clear error |
-| Big-file uploads | 50 MB cap | up to 2000 MB via local Bot API |
-| Picker | — | options over the limit are flagged |
+| Oversized media | split into parts | signed, expiring download link |
+| Big-file uploads | 50 MB cap | up to 2000 MB via local Bot API (or a link) |
+| Picker | — | every quality listed; over-limit options flagged for link delivery |
+| Disk safety | none | refuse to start a download below `MIN_FREE_DISK_GB` |
 | yt-dlp | 3 retries, no request sleep | 10 retries, `--sleep-requests 1`, concurrency cap |
 | IP family | applied globally | skipped when a proxy is set |
-| Format cap | `best` = any height | `best` capped at `MAX_VIDEO_HEIGHT` (1080p) |
+| Format cap | `best` capped at 1080p | `best` = highest available |
 | `/health` | basic | server mode, upload limit, Bot API reachability, data dir |
