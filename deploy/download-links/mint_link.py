@@ -8,7 +8,7 @@ bot/services/download_links.py and to the secure_link_md5 directive:
     token = base64url( md5( f"{expires}{uri} {secret}" ) )   # '=' stripped
 
 Usage:
-    python3 mint_link.py https://dl.example.com /f/abc/media.mp4 SECRET [ttl_s]
+    python3 mint_link.py https://dl.example.com /dl/abc/media.mp4 SECRET [ttl_s]
 """
 
 from __future__ import annotations

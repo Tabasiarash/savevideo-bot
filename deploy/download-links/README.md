@@ -17,7 +17,7 @@ optional):
 
 ```
 token = base64url( md5( f"{expires}{uri} {secret}" ) )
-link  = "{base_url}/f/{id}/{filename}?md5={token}&expires={expires}"
+link  = "{base_url}/dl/{id}/{filename}?md5={token}&expires={expires}"
 ```
 
 nginx must hash the *same* string, in the *same* order, with the *same* spacing:
@@ -41,7 +41,8 @@ serves `DOWNLOAD_LINK_DIR`. Prefer a domain you do not mind being seen publicly
 ```bash
 printf 'set $download_link_secret "%s";\n' "$(openssl rand -hex 32)" \
     | sudo tee /etc/nginx/savevideo-link-secret.conf >/dev/null
-sudo chmod 600 /etc/nginx/savevideo-link-secret.conf
+sudo chown root:www-data /etc/nginx/savevideo-link-secret.conf
+sudo chmod 640 /etc/nginx/savevideo-link-secret.conf
 ```
 
 The include uses `set`, so include it **inside** the `server {}` block (as the
@@ -57,6 +58,17 @@ sudo nginx -t && sudo systemctl reload nginx
 
 `root` must equal `DOWNLOAD_LINK_DIR` (default `/srv/savevideo-links`).
 
+The link dir must be readable/traversable by the nginx worker user (usually
+`www-data`) while writable only by the bot user:
+
+```bash
+sudo install -d -o savevideo -g www-data -m 0750 /srv/savevideo-links
+```
+
+If the chosen hostname already has a vhost you want to reuse, do **not** add a
+second `server_name`; instead paste the `location ^~ /dl/ {}` block from
+`nginx-location.conf` into that existing `server {}`.
+
 ## 4. Configure the bot
 
 ```env
@@ -70,19 +82,20 @@ Links stay disabled until `DOWNLOAD_LINK_BASE_URL` and
 
 ## 5. Verify with a real request
 
-Put any file under the tree (the bot itself writes `/f/<id>/<file>`), then:
+Put any file under the tree (the bot itself writes `/dl/<id>/<file>`), then:
 
 ```bash
-URI=/f/test/hello.txt
-sudo mkdir -p /srv/savevideo-links/f/test
-echo hi | sudo tee /srv/savevideo-links/f/test/hello.txt
+URI=/dl/test/hello.txt
+sudo mkdir -p /srv/savevideo-links/dl/test
+echo hi | sudo tee /srv/savevideo-links/dl/test/hello.txt
 URL=$(python3 mint_link.py https://dl.example.com "$URI" "$SECRET" 300)
 curl -sSI "$URL" | head -n1     # expect: HTTP/2 200
 curl -sSI "https://dl.example.com$URI" | head -n1   # expect: HTTP/2 403
 ```
 
 A 403 on the signed URL means the two formulas disagree — re-check the order,
-spacing and the base64url alphabet on both sides.
+spacing and the base64url alphabet on both sides. An expired-but-otherwise-valid
+URL returns **410**.
 
 ## 6. Cleanup
 

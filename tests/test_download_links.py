@@ -18,9 +18,9 @@ def source_file(tmp_path, name: str, size: int):
 
 def test_secure_link_token_matches_nginx_formula():
     # Equivalent nginx/openssl computation:
-    #   echo -n '1700000000/f/test/hello.txt secret' \
+    #   echo -n '1700000000/dl/test/hello.txt secret' \
     #     | openssl md5 -binary | openssl base64 | tr +/ -_ | tr -d =
-    assert secure_link_token("/f/test/hello.txt", 1700000000, "secret") == "QX13ZNStsfWXVgoyCJrrFg"
+    assert secure_link_token("/dl/test/hello.txt", 1700000000, "secret") == "T7x3rByjPofOHsks2TnaGg"
 
 
 def test_safe_filename():
@@ -38,7 +38,7 @@ async def test_create_moves_file_and_mints_a_url(services, tmp_path):
     )
 
     assert result.size_bytes == 1024
-    assert result.url.startswith("http://links.test/f/")
+    assert result.url.startswith("http://links.test/dl/")
     assert "md5=" in result.url and "expires=" in result.url
     assert not source.exists()  # moved into place, not copied
     stored = list(services.settings.download_link_dir_resolved.rglob("media.mp4"))

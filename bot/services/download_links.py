@@ -101,7 +101,7 @@ class DownloadLinkStore:
             log.warning("download-link move failed: %s", exc)
             raise LinkError("error") from exc
 
-        uri = f"/f/{link_id}/{filename}"
+        uri = f"/dl/{link_id}/{filename}"
         token = secure_link_token(uri, expires, self.settings.download_link_secret)
         await db.download_link_create(
             token=token,

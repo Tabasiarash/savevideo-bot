@@ -18,6 +18,8 @@ SERVICE_USER="${SERVICE_USER:-savevideo}"
 SERVICE_NAME="${SERVICE_NAME:-savevideo-bot}"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+DOWNLOAD_LINK_DIR="${DOWNLOAD_LINK_DIR:-/srv/savevideo-links}"
+LINK_GROUP="${LINK_GROUP:-www-data}"
 
 log() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
@@ -79,6 +81,19 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/data" "$INSTALL_DIR/tmp" "$
 [[ -f "$INSTALL_DIR/.env" ]] && chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/.env"
 chmod 600 "$INSTALL_DIR/.env" 2>/dev/null || true
 
+chmod 600 "$INSTALL_DIR/.env" 2>/dev/null || true
+
+# --- download links --------------------------------------------------------
+# Over-limit files are served by nginx from DOWNLOAD_LINK_DIR: writable by the
+# service user, readable/traversable by the web server group. Must exist before
+# the unit is installed because it is listed in ReadWritePaths.
+if getent group "$LINK_GROUP" >/dev/null 2>&1; then
+    install -d -o "$SERVICE_USER" -g "$LINK_GROUP" -m 0750 "$DOWNLOAD_LINK_DIR"
+else
+    warn "group '$LINK_GROUP' not found — links will be readable only by $SERVICE_USER"
+    install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0750 "$DOWNLOAD_LINK_DIR"
+fi
+
 # --- systemd unit ----------------------------------------------------------
 log "installing systemd unit -> /etc/systemd/system/$SERVICE_NAME.service"
 install -m 0644 "$INSTALL_DIR/savevideo-bot.service" "/etc/systemd/system/$SERVICE_NAME.service"
@@ -88,7 +103,7 @@ sed -i \
     -e "s|^WorkingDirectory=.*|WorkingDirectory=$INSTALL_DIR|" \
     -e "s|^EnvironmentFile=.*|EnvironmentFile=$INSTALL_DIR/.env|" \
     -e "s|^ExecStart=.*|ExecStart=$INSTALL_DIR/.venv/bin/python -m bot.main|" \
-    -e "s|^ReadWritePaths=.*|ReadWritePaths=$INSTALL_DIR/data $INSTALL_DIR/tmp $INSTALL_DIR/.venv|" \
+    -e "s|^ReadWritePaths=.*|ReadWritePaths=$INSTALL_DIR/data $INSTALL_DIR/tmp $INSTALL_DIR/.venv $DOWNLOAD_LINK_DIR|" \
     "/etc/systemd/system/$SERVICE_NAME.service"
 
 systemctl daemon-reload

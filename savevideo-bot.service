@@ -36,7 +36,7 @@ RestrictAddressFamilies=AF_INET AF_INET6
 #   IPAddressDeny=any
 # Left disabled by default because it breaks the public Bot API, DNS and the
 # bundled bgutil provider unless every needed address is listed.
-ReadWritePaths=/opt/savevideo-bot/data /opt/savevideo-bot/tmp /opt/savevideo-bot/.venv
+ReadWritePaths=/opt/savevideo-bot/data /opt/savevideo-bot/tmp /opt/savevideo-bot/.venv /srv/savevideo-links
 
 [Install]
 WantedBy=multi-user.target

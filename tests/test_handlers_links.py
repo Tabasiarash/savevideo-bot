@@ -198,7 +198,7 @@ async def test_upload_failure_falls_back_to_link(services, runner, bot, make_mes
     cb = make_callback(data="dl:video_720", message=msg)
     await links.on_format_pick(cb, bot)
     assert bot.videos == []
-    assert any("http://links.test/f/" in e for e in msg.edits)
+    assert any("http://links.test/dl/" in e for e in msg.edits)
     assert await services.db.downloads_total() == 1
 
 
@@ -228,7 +228,7 @@ async def test_over_limit_delivers_a_link(
     cb = make_callback(data="dl:video_720", message=msg)
     await links.on_format_pick(cb, bot)
     assert bot.videos == []
-    assert any("http://links.test/f/" in e for e in msg.edits)
+    assert any("http://links.test/dl/" in e for e in msg.edits)
     assert await services.db.downloads_total() == 1
 
 
@@ -271,7 +271,7 @@ async def test_oversized_downloads_then_links(
     cb = make_callback(data="dl:video_best", message=msg)
     await links.on_format_pick(cb, bot)
     assert len(runner.calls) == 1
-    assert any("http://links.test/f/" in e for e in msg.edits)
+    assert any("http://links.test/dl/" in e for e in msg.edits)
 
 
 async def test_fitting_estimate_still_downloads(services, runner, bot, make_message, make_callback):
