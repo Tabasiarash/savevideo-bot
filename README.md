@@ -128,6 +128,7 @@ option has a safe default and the bot degrades gracefully.
 | `PROXY_URL_INSTAGRAM` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
 | `PROXY_URL_TIKTOK` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
 | `PROXY_URL_X` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
+| `PROXY_URL_SOUNDCLOUD` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
 | `YTDLP_EXTRA_ARGS` | *(empty)* | Extra yt-dlp CLI args, shell-quoted. |
 | `FORCE_IPV4` | `false` | Force IPv4 for every request. |
 | `FORCE_IPV6` | `false` | Force IPv6, **YouTube URLs only**. |
@@ -244,6 +245,16 @@ wall without cookies.
   plane connects but the QUIC data plane is blocked. Confirm with `/health`.
 - `YTDLP_EXTRA_ARGS` adds extractor knobs without code changes, e.g.
   `--extractor-args "youtube:player_client=web_safari"`.
+
+## SoundCloud and other audio-only sources
+
+SoundCloud is supported **natively** by yt-dlp, so no extra configuration is
+needed: send a track link, pick MP3 or M4A, and the bot downloads and uploads
+the audio. Because a track has no video streams, the picker shows only the
+audio (MP3/M4A), thumbnail and cancel buttons. A set/playlist works through
+`/playlist <url>` like any other playlist (capped at `PLAYLIST_MAX_ITEMS`).
+Route it through its own egress with the optional `PROXY_URL_SOUNDCLOUD`
+override if needed.
 
 ## Admin commands
 

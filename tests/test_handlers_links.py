@@ -124,6 +124,32 @@ async def test_playlist_uses_pl_prefix(services, runner, make_message):
     assert all(d.startswith("pl:") for d in data)
 
 
+async def test_audio_only_source_shows_no_video_rows(services, runner, make_message):
+    runner.info = {
+        "title": "A Track",
+        "duration": 180,
+        "extractor_key": "Soundcloud",
+        "webpage_url": "https://soundcloud.com/artist/track",
+        "formats": [
+            {"height": None, "vcodec": "none", "acodec": "mp3", "filesize": 3_000_000},
+        ],
+    }
+    msg = make_message()
+    await links.handle_urls(msg, ["https://soundcloud.com/artist/track"], playlist=False)
+    data = [b.callback_data for row in msg.markups[-1].inline_keyboard for b in row]
+    assert not any(d.startswith("dl:video") for d in data)
+    assert {"dl:audio_mp3", "dl:audio_m4a", "dl:thumbnail", "dl:cancel"} <= set(data)
+
+
+async def test_playlist_over_cap_is_trimmed_for_soundcloud_sets(services, runner, make_message):
+    runner.info["entries"] = [{"title": f"t{i}"} for i in range(15)]
+    msg = make_message()
+    await links.handle_urls(msg, ["https://soundcloud.com/artist/sets/x"], playlist=True)
+    assert any("first 10 items" in e for e in msg.edits)
+    data = [b.callback_data for row in msg.markups[-1].inline_keyboard for b in row]
+    assert all(d.startswith("pl:") for d in data)
+
+
 async def test_on_format_pick_expired(services, make_callback):
     cb = make_callback(data="dl:video_720")
     await links.on_format_pick(cb, services.bot)

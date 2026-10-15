@@ -22,7 +22,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "start": (
             "Hi {name}! 👋\n\n"
             "I can download videos and audio from YouTube, Instagram, TikTok, X/Twitter, "
-            "Facebook, Reddit, Vimeo, Pinterest and many other sites.\n\n"
+            "Facebook, Reddit, Vimeo, Pinterest, SoundCloud and many other sites.\n\n"
             "Just send me a link.\n\n"
             "❕ Disclaimer: you are responsible for respecting the copyright of the "
             "content and the terms of service of the respective site."
@@ -34,7 +34,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• <b>/playlist</b> &lt;url&gt; — download up to 10 items of a playlist.\n"
             "• <b>/language</b> — switch language.\n"
             "• Inline mode: type @{botname} + a URL in any chat.\n\n"
-            "Sources: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest, and more."
+            "Sources: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest, SoundCloud, and more."
         ),
         "choose_language": "Please choose your language:",
         "language_set": "Language set to {lang}.",
@@ -142,7 +142,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "start": (
             "Hallo {name}! 👋\n\n"
             "Ich lade Videos und Audiodateien von YouTube, Instagram, TikTok, X/Twitter, "
-            "Facebook, Reddit, Vimeo, Pinterest und vielen weiteren Seiten herunter.\n\n"
+            "Facebook, Reddit, Vimeo, Pinterest, SoundCloud und vielen weiteren Seiten herunter.\n\n"
             "Schick mir einfach einen Link.\n\n"
             "❕ Hinweis: Du bist dafür verantwortlich, das Urheberrecht der Inhalte und die "
             "Nutzungsbedingungen der jeweiligen Seite zu respektieren."
@@ -154,7 +154,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• <b>/playlist</b> &lt;url&gt; — lade bis zu 10 Elemente einer Playlist.\n"
             "• <b>/language</b> — Sprache ändern.\n"
             "• Inline-Modus: tippe @{botname} + eine URL in einen beliebigen Chat.\n\n"
-            "Quellen: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest u. v. m."
+            "Quellen: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest, SoundCloud u. v. m."
         ),
         "choose_language": "Bitte wähle deine Sprache:",
         "language_set": "Sprache auf {lang} gesetzt.",
@@ -262,7 +262,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "start": (
             "سلام {name}! 👋\n\n"
             "من ویدیو و صدا از یوتیوب، اینستاگرام، تیک‌تاک، ایکس/توییتر، فیس‌بوک، "
-            "ردیت، ویمیو، پینترست و بسیاری از سایت‌های دیگر دانلود می‌کنم.\n\n"
+            "ردیت، ویمیو، پینترست، ساندکلود و بسیاری از سایت‌های دیگر دانلود می‌کنم.\n\n"
             "فقط یک لینک برایم بفرستید.\n\n"
             "❕ یادآوری: شما مسئول رعایت کپی‌رایت محتوا و شرایط استفاده از هر سایت هستید."
         ),
@@ -273,7 +273,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• <b>/playlist</b> &lt;url&gt; — دانلود تا ۱۰ مورد از یک پلی‌لیست.\n"
             "• <b>/language</b> — تغییر زبان.\n"
             "• حالت اینلاین: در هر چتی @{botname} و سپس یک URL بنویسید.\n\n"
-            "منابع: یوتیوب، اینستاگرام، تیک‌تاک، ایکس/توییتر، فیس‌بوک، ردیت، ویمیو، پینترست و بیشتر."
+            "منابع: یوتیوب، اینستاگرام، تیک‌تاک، ایکس/توییتر، فیس‌بوک، ردیت، ویمیو، پینترست، ساندکلود و بیشتر."
         ),
         "choose_language": "لطفاً زبان خود را انتخاب کنید:",
         "language_set": "زبان به {lang} تغییر کرد.",

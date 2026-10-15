@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     proxy_url_instagram: str = ""
     proxy_url_tiktok: str = ""
     proxy_url_x: str = ""
+    proxy_url_soundcloud: str = ""
     # Extra yt-dlp flags, shell-quoted, appended last (may override defaults).
     ytdlp_extra_args: str = ""
     # Force an IP family. IPv6 is only ever applied to YouTube URLs because a

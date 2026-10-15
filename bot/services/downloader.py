@@ -34,6 +34,7 @@ _YT_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
 _INSTAGRAM_HOSTS = ("instagram.com", "instagr.am")
 _TIKTOK_HOSTS = ("tiktok.com",)
 _X_HOSTS = ("x.com", "twitter.com")
+_SOUNDCLOUD_HOSTS = ("soundcloud.com", "api.soundcloud.com")
 EGRESS_CACHE_TTL = 300.0
 # Lightweight proxy-reachability check (see probe_proxy_egress).
 PROXY_EXIT_CACHE_TTL = 60.0
@@ -500,6 +501,8 @@ def _platform_proxy(settings: Settings, url: str | None) -> str:
             return settings.proxy_url_tiktok or settings.proxy_url
         if _host_matches(host, _X_HOSTS):
             return settings.proxy_url_x or settings.proxy_url
+        if _host_matches(host, _SOUNDCLOUD_HOSTS):
+            return settings.proxy_url_soundcloud or settings.proxy_url
     return settings.proxy_url
 
 
@@ -590,6 +593,7 @@ def format_proxy_summary(settings: Settings) -> str:
             ("ig", settings.proxy_url_instagram),
             ("tt", settings.proxy_url_tiktok),
             ("x", settings.proxy_url_x),
+            ("sc", settings.proxy_url_soundcloud),
         )
         if value
     ]

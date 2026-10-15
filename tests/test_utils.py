@@ -71,6 +71,17 @@ def test_hostname_and_site():
     assert site_from_url("https://example.org/x") == "example.org"
 
 
+def test_soundcloud_site_and_normalisation():
+    assert site_from_url("https://soundcloud.com/artist/track") == "soundcloud"
+    assert site_from_url("https://on.soundcloud.com/abc123") == "soundcloud"
+    assert hostname_from_url("https://m.soundcloud.com/artist/track") == "soundcloud.com"
+    # www/m prefixes and tracking params (si, utm_*) are stripped for the cache key.
+    assert (
+        normalize_url("https://www.soundcloud.com/artist/track?si=share&utm_source=x")
+        == "https://soundcloud.com/artist/track"
+    )
+
+
 # --- SSRF -----------------------------------------------------------------
 
 

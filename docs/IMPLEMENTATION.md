@@ -308,4 +308,20 @@ version is recorded in `schema_version`.
   multiple bot instances against one DB would not share them.
 - Signed links are bearer URLs: anyone with the URL can download until it expires.
 
-<!-- Spotify and SoundCloud sections are appended by later commits. -->
+---
+
+## 12. SoundCloud
+
+SoundCloud is handled by yt-dlp's built-in `soundcloud` extractor, so no special
+code path is needed. `soundcloud.com` and subdomains are listed in
+`utils._KNOWN_EXTRACTOR_HOSTS` (the SSRF redirect probe is skipped) and in
+`utils.site_from_url` (stats label `soundcloud`). `downloader._SOUNDCLOUD_HOSTS`
+covers `soundcloud.com` and `api.soundcloud.com` for proxy selection:
+`PROXY_URL_SOUNDCLOUD` → `PROXY_URL` → direct.
+
+A track has no video streams, so `video_quality_rows` returns `[]` and the picker
+shows only Audio (MP3/M4A), Thumbnail and Cancel — the intended audio-only UX.
+Sets/playlists are downloaded through `/playlist` (capped at `PLAYLIST_MAX_ITEMS`)
+and sent sequentially as audio.
+
+<!-- Spotify section is appended by a later commit. -->

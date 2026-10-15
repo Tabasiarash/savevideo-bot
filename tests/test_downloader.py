@@ -263,6 +263,15 @@ def test_platform_proxy_override_and_fallback():
     assert _platform_proxy(s, None) == "socks5h://base:1080"
 
 
+def test_platform_proxy_soundcloud():
+    s = _settings(proxy_url="socks5h://base:1080", proxy_url_soundcloud="socks5h://sc:1080")
+    assert _platform_proxy(s, "https://soundcloud.com/artist/track") == "socks5h://sc:1080"
+    assert _platform_proxy(s, "https://api.soundcloud.com/tracks/1") == "socks5h://sc:1080"
+    # No SoundCloud override -> falls back to the base proxy, then to none.
+    assert _platform_proxy(_settings(proxy_url="socks5h://base:1080"), "https://soundcloud.com/a/b") == "socks5h://base:1080"
+    assert _platform_proxy(_settings(), "https://soundcloud.com/a/b") == ""
+
+
 def test_extra_args_uses_platform_proxy(monkeypatch):
     _no_js(monkeypatch)
     runner = YtDlpRunner(
@@ -369,6 +378,9 @@ def test_format_proxy_summary():
     out = format_proxy_summary(s)
     assert out.startswith("socks5h://base:1080")
     assert "tt=socks5h://tt:1080" in out
+    assert "sc=socks5h://sc:1080" in format_proxy_summary(
+        _settings(proxy_url="socks5h://base:1080", proxy_url_soundcloud="socks5h://sc:1080")
+    )
 
 async def test_probe_proxy_egress_off():
     probe = await YtDlpRunner(_settings()).probe_proxy_egress()
