@@ -100,7 +100,7 @@ async def on_spotify_message(message: Message, bot: Bot) -> None:
         await _handle_collection(message, bot, ref, lang, status)
         return
 
-    await _handle_track(message, bot, ref, lang, status)
+    await _handle_track(message, ref, lang, status)
 
 
 async def _resolve(raw: str):
@@ -144,7 +144,7 @@ async def _match(meta: metadata.TrackMeta, tmpdir: Path):
     )
 
 
-async def _handle_track(message: Message, bot: Bot, ref, lang: str, status: Message) -> None:
+async def _handle_track(message: Message, ref, lang: str, status: Message) -> None:
     user = message.from_user
     assert user is not None
 
@@ -164,7 +164,7 @@ async def _handle_track(message: Message, bot: Bot, ref, lang: str, status: Mess
         cleanup_dir(tmpdir)
         return
 
-    await _present(message, bot, ref, meta, candidate, tmpdir, lang, status)
+    await _present(message, ref, meta, candidate, tmpdir, lang, status)
 
 
 def _audio_meta(meta: metadata.TrackMeta, cover_path: Path) -> links.AudioMeta:
@@ -215,7 +215,6 @@ async def _download_cover(url: str | None, dest: Path) -> Path | None:
 
 async def _present(
     message: Message,
-    bot: Bot,
     ref,
     meta: metadata.TrackMeta,
     candidate: matcher.Candidate,

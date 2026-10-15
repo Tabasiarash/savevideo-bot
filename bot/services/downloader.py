@@ -602,6 +602,7 @@ def format_proxy_summary(settings: Settings) -> str:
             ("tt", settings.proxy_url_tiktok),
             ("x", settings.proxy_url_x),
             ("sc", settings.proxy_url_soundcloud),
+            ("sp", settings.proxy_url_spotify),
         )
         if value
     ]

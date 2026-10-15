@@ -17,6 +17,7 @@ from aiogram.enums import ParseMode
 from bot.config import settings
 from bot.deps import init_services
 from bot.handlers import admin, inline, links, spotify, start
+from bot.services.spotify.metadata import META_TTL_S
 from bot.services.updater import auto_update_loop
 
 logging.basicConfig(
@@ -140,6 +141,7 @@ async def _maintenance_loop(srv) -> None:
         try:
             await srv.db.purge_deeplinks(24 * 3600)
             await srv.db.purge_cache_expired(settings.cache_ttl_s)
+            await srv.db.spotify_meta_purge_expired(META_TTL_S)
             await srv.download_links.cleanup(srv.db)
         except Exception:  # noqa: BLE001
             log.warning("maintenance sweep failed", exc_info=True)
@@ -186,6 +188,7 @@ async def main() -> None:
 
     await srv.db.connect()
     await srv.db.purge_cache_expired(settings.cache_ttl_s)
+    await srv.db.spotify_meta_purge_expired(META_TTL_S)
     sweep_stale_tmp(settings.temp_dir_resolved)
     with contextlib.suppress(Exception):
         await srv.download_links.cleanup(srv.db)  # reconcile link files/rows at startup

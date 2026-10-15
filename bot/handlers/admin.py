@@ -186,6 +186,7 @@ async def cmd_health(message: Message) -> None:
             js_runtime=detect_js_runtime(settings) or "none",
             curl_cffi=curl_cffi_version() or "not installed",
             ip_family=_ip_family_label(),
+            spotify=_spotify_status(),
             extra_args=settings.ytdlp_extra_args or "none",
             egress=egress,
             proxy_exit=proxy_exit,
@@ -221,6 +222,14 @@ def _cookies_status(path: str) -> str:
         return "missing"
     days = (time.time() - p.stat().st_mtime) / 86400
     return f"set ({days:.0f}d old)"
+
+
+def _spotify_status() -> str:
+    if not settings.enable_spotify:
+        return "off"
+    sources = ",".join(settings.spotify_sources()) or "none"
+    api = "api" if settings.spotify_client_id else "no-api"
+    return f"on [{sources}] {api}"
 
 
 def _ip_family_label() -> str:

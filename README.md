@@ -9,6 +9,10 @@ Send the bot a link → it shows the available qualities and sizes → pick one 
 the file is downloaded, transcoded if needed and uploaded to the chat. Results
 are cached by Telegram `file_id`, so repeat downloads are instant.
 
+Spotify links are supported through **metadata-matching** (the bot finds a
+downloadable equivalent from another source) rather than by downloading from
+Spotify itself; see [Spotify](#spotify-metadata-match).
+
 ## Features
 
 - 🎬 **Video** (up to the max available height), **audio** (MP3 / M4A) and
@@ -129,6 +133,7 @@ option has a safe default and the bot degrades gracefully.
 | `PROXY_URL_TIKTOK` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
 | `PROXY_URL_X` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
 | `PROXY_URL_SOUNDCLOUD` | *(empty)* | Per-platform override; falls back to `PROXY_URL`. |
+| `PROXY_URL_SPOTIFY` | *(empty)* | Per-platform override for Spotify metadata fetches. |
 | `YTDLP_EXTRA_ARGS` | *(empty)* | Extra yt-dlp CLI args, shell-quoted. |
 | `FORCE_IPV4` | `false` | Force IPv4 for every request. |
 | `FORCE_IPV6` | `false` | Force IPv6, **YouTube URLs only**. |
@@ -255,6 +260,34 @@ audio (MP3/M4A), thumbnail and cancel buttons. A set/playlist works through
 `/playlist <url>` like any other playlist (capped at `PLAYLIST_MAX_ITEMS`).
 Route it through its own egress with the optional `PROXY_URL_SOUNDCLOUD`
 override if needed.
+
+## Spotify (metadata-match)
+
+Spotify streams are DRM-protected, so the bot **never downloads from Spotify and
+never touches DRM**. Instead, when `ENABLE_SPOTIFY=true`, sending a Spotify
+track link makes the bot read the track's metadata (oEmbed + page tags, no
+credentials required), search the configured sources for a downloadable
+equivalent, and offer the usual audio picker for the best match. The router is
+always registered, so when the feature is off a Spotify link gets a clear
+"disabled" reply instead of falling through to the generic link flow.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `ENABLE_SPOTIFY` | `false` | Turn the Spotify metadata-match flow on. |
+| `SPOTIFY_MATCH_SOURCES` | `youtube,soundcloud` | Match sources, in priority order. |
+| `SPOTIFY_MIN_SCORE` | `0.65` | Minimum score (0-1) to offer a candidate. |
+| `SPOTIFY_DURATION_TOLERANCE_S` | `4` | Allowed length difference when scoring. |
+| `SPOTIFY_ENABLE_COLLECTIONS` | `false` | Expand albums/playlists/shows/artists. |
+| `SPOTIFY_MAX_ITEMS` | `25` | Cap on items per collection link. |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | *(empty)* | Optional Web API creds; required only for collections. |
+| `SPOTIFY_META_CONCURRENCY` | `4` | Parallel metadata fetches for a collection. |
+| `PROXY_URL_SPOTIFY` | *(empty)* | Per-platform override for metadata fetches. |
+
+Collections (album/playlist/show/artist) are only enumerated when
+`SPOTIFY_ENABLE_COLLECTIONS=true` **and** Web API credentials are set; each item
+is matched and downloaded through the normal audio path. Matched downloads are
+tagged with the track title/artist and cover art (MP3 ID3 / M4A attached
+picture) via ffmpeg, best-effort.
 
 ## Admin commands
 

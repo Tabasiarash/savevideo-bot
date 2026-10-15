@@ -402,6 +402,9 @@ def test_format_proxy_summary():
     assert "sc=socks5h://sc:1080" in format_proxy_summary(
         _settings(proxy_url="socks5h://base:1080", proxy_url_soundcloud="socks5h://sc:1080")
     )
+    assert "sp=socks5h://sp:1080" in format_proxy_summary(
+        _settings(proxy_url="socks5h://base:1080", proxy_url_spotify="socks5h://sp:1080")
+    )
 
 async def test_probe_proxy_egress_off():
     probe = await YtDlpRunner(_settings()).probe_proxy_egress()

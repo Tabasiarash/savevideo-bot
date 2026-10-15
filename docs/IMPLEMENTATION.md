@@ -72,6 +72,7 @@ replace an individual service with a fake.
 | Handlers | `bot/handlers/start.py` | `/start`, `/help`, `/language`, deep-link entry. |
 | | `bot/handlers/admin.py` | `/stats`, `/broadcast`, `/ban`, `/unban`, `/update_ytdlp`, `/health`. |
 | | `bot/handlers/links.py` | Core flow: detect → info → picker → download → upload/cache/link. |
+| | `bot/handlers/spotify.py` | Spotify link detection → metadata → source match → audio picker (feature-gated). |
 | | `bot/handlers/inline.py` | Inline mode: cached result or deep-link article. |
 | | `bot/handlers/common.py` | Shared: `register_user`, language resolution, `text()`. |
 | Services | `bot/services/downloader.py` | `YtDlpRunner`: yt-dlp args, cookies, proxy, JS runtime, download, probes, format/quality builder. |
@@ -80,6 +81,12 @@ replace an individual service with a fake.
 | | `bot/services/ratelimit.py` | Cooldown, daily quota, one-active-job-per-user. |
 | | `bot/services/cache.py` | URL+format → Telegram `file_id` cache. |
 | | `bot/services/updater.py` | yt-dlp version check / self-update / update-and-retry heuristic. |
+| | `bot/services/breaker.py` | Generic per-key failure breaker (threshold + cooldown, injectable clock). |
+| | `bot/services/tagger.py` | Best-effort ffmpeg tagger (MP3 ID3 / M4A attached picture; arg list, no shell). |
+| | `bot/services/spotify/urls.py` | Spotify URL parse/classify + short-link resolution. |
+| | `bot/services/spotify/http.py` | Blocking curl_cffi GET/POST wrapped for asyncio, byte/redirect limits. |
+| | `bot/services/spotify/metadata.py` | `TrackMeta` via oEmbed + page tags (+ optional Web API), TTL-cached; collection listing. |
+| | `bot/services/spotify/matcher.py` | Candidate scoring (title/artist/duration) + per-source search via `YtDlpRunner`. |
 | Deploy | `deploy.sh` / `install.sh` | systemd install/update; interactive wizard. |
 | | `deploy/download-links/` | nginx `secure_link` config, secret include, `mint_link.py`. |
 | | `deploy/home-socks/` | Tailscale/`ssh -D` SOCKS egress unit. |
@@ -145,7 +152,7 @@ lives in [`.env.example`](../.env.example); defaults:
 | `AUTO_UPDATE_YTDLP` / `UPDATE_CHECK_HOURS` | true / 24 | Self-update loop. |
 | `COOKIES_FILE` | empty | Netscape cookies.txt. |
 | `PROXY_URL` | empty | e.g. `socks5h://user:pass@host:1080`. |
-| `PROXY_URL_INSTAGRAM`/`_TIKTOK`/`_X` | empty | Per-platform overrides; fall back to `PROXY_URL`. |
+| `PROXY_URL_INSTAGRAM`/`_TIKTOK`/`_X`/`_SOUNDCLOUD`/`_SPOTIFY` | empty | Per-platform overrides; fall back to `PROXY_URL`. |
 | `YTDLP_EXTRA_ARGS` | empty | Extra CLI flags (shell-quoted). |
 | `FORCE_IPV4` / `FORCE_IPV6` | false | IPv6 applied to YouTube URLs only. |
 | `YTDLP_JS_RUNTIME` | auto | `auto` = Deno → Node ≥22; legacy `JS_RUNTIME`. |
@@ -161,11 +168,19 @@ lives in [`.env.example`](../.env.example); defaults:
 | `MAX_MEDIA_GROUP` | 10. |
 | `PROGRESS_EDIT_INTERVAL` | 3.0 | Progress edit throttle (s). |
 | `UPLOAD_LARGE_RUNNING_JOBS` | 1. |
+| `ENABLE_SPOTIFY` | false | Spotify metadata-match flow (section 13). |
+| `SPOTIFY_MATCH_SOURCES` | `youtube,soundcloud` | Match sources in priority order. |
+| `SPOTIFY_MIN_SCORE` | 0.65 | Minimum candidate score to offer. |
+| `SPOTIFY_DURATION_TOLERANCE_S` | 4 | Allowed length difference when scoring. |
+| `SPOTIFY_ENABLE_COLLECTIONS` | false | Expand album/playlist/show/artist. |
+| `SPOTIFY_MAX_ITEMS` | 25 | Cap on items per collection link. |
+| `SPOTIFY_CLIENT_ID`/`_SECRET` | empty | Optional Web API creds (collections need them). |
+| `SPOTIFY_META_CONCURRENCY` | 4 | Parallel metadata fetches for a collection. |
 
 Derived helpers on `Settings`: `max_duration_s`, `max_mb` (legacy alias),
 `is_local_api`, `upload_limit_bytes`, `fits_upload_limit()`, `cache_ttl_s`,
 `download_link_*`, `min_free_disk_bytes`, `data_dir`, `temp_dir_resolved`,
-`is_admin()`.
+`is_admin()`, `spotify_sources()`, `proxy_for_spotify()`.
 
 ---
 
@@ -270,11 +285,14 @@ version is recorded in `schema_version`.
 | --- | --- |
 | 1 | `users`, `downloads`, `cache`, `deeplinks`, `counters`, `schema_version` + indexes. |
 | 2 | `download_links` (signed-link registry) + indexes. |
+| 3 | `spotify_meta` (`spotify_id` PK, `type`, `json`, `fetched_at`) + `idx_spotify_meta_fetched`. |
 
 - `cache` is keyed `(url_hash, format_key)` → `file_id`; `url_hash = sha256(normalized_url)`.
 - `counters` holds `cache:hit` / `cache:miss` for the stats hit-rate.
 - `downloads` records every attempt (status `ok`/`link`/`error`, error class, size,
   duration) and drives daily-quota counting and `/stats`.
+- `spotify_meta` caches resolved Spotify metadata JSON with a `fetched_at` stamp; reads
+  honour `META_TTL_S` (24 h) and the maintenance loop purges expired rows.
 
 ---
 
@@ -291,8 +309,8 @@ version is recorded in `schema_version`.
 - Background tasks: hourly maintenance (purge deeplinks/cache/links) and the yt-dlp
   auto-update loop (notifies admins on failure).
 - Admin `/health` reports yt-dlp/ffmpeg versions, disk, queue, mode, upload limit, SQLite
-  access, proxy summary (masked), cookies age, JS runtime, curl_cffi, IP family, extra
-  args, a live egress probe and the masked proxy exit IP.
+  access, proxy summary (masked), cookies age, JS runtime, curl_cffi, IP family, Spotify
+  status, extra args, a live egress probe and the masked proxy exit IP.
 
 ---
 
@@ -324,4 +342,55 @@ shows only Audio (MP3/M4A), Thumbnail and Cancel — the intended audio-only UX.
 Sets/playlists are downloaded through `/playlist` (capped at `PLAYLIST_MAX_ITEMS`)
 and sent sequentially as audio.
 
-<!-- Spotify section is appended by a later commit. -->
+## 13. Spotify
+
+The bot never downloads from Spotify: its streams are DRM-protected and there
+is no yt-dlp extractor. With `ENABLE_SPOTIFY=true`, a Spotify link is instead
+*metadata-matched* to a downloadable equivalent from another source, and the
+normal audio pipeline (picker → download → tag → upload/cache/link) is reused.
+
+**Routing.** `spotify.router` is registered **before `links.router`** and
+**regardless of the flag**, so a Spotify URL is always intercepted and never
+falls through to the generic link flow. With the feature off the handler replies
+with `spotify_disabled`. The filter (`SpotifyLinkFilter`) only claims URLs whose
+host is a Spotify host, so every other link is untouched.
+
+**Pipeline** (`on_spotify_message`): resolve the URL
+(`urls.parse_spotify_url`; short `spotify.link`/`spoti.fi` links are followed
+once) → **metadata** (`metadata.fetch_metadata`) → **match**
+(`matcher.find_match`) → **present** the audio picker.
+
+- **Metadata** (`spotify/metadata.py`): tries oEmbed first, then page
+  `<meta>`/JSON-LD tags, and (when credentials are set) the Web API, merging all
+  three into a `TrackMeta`. Results are cached in `spotify_meta` for
+  `META_TTL_S` (24 h). Only the public page is read; no credentials are required
+  for single tracks.
+- **Matching** (`spotify/matcher.py`): builds a query from title + primary
+  artist, searches each configured source in priority order through
+  `YtDlpRunner.extract_info` (explicit per-source `proxy` so a search URL with
+  no host is still routed correctly), then scores each candidate: title `0.60`,
+  artist `0.25`, duration `0.15` (duration scored within
+  `SPOTIFY_DURATION_TOLERANCE_S`). The best candidate at or above
+  `SPOTIFY_MIN_SCORE` wins. A per-source `breaker.Breaker` (3 failures / 300 s
+  cooldown) skips a source that is failing, and YouTube is tried after
+  SoundCloud so the bot still works while YouTube is bot-walled.
+- **Present** (`_present`): stores a `PendingFlow` with the matched URL, a
+  `cache_key` of `spotify:<id>` (so the same track reuses the cached upload even
+  across different source URLs), an `AudioMeta` (title/artist/cover) and a
+  `postprocess` hook, then shows the reusable audio picker (`links.picker_keyboard`).
+
+**Tagging** (`spotify/tagger.py`): on download the `postprocess` hook fetches the
+cover and calls `tag_audio`, which runs ffmpeg with an **argument list (never a
+shell)** to write ID3 tags + attached picture (MP3) or an `attached_pic` stream
+(M4A). Tag values from untrusted pages are sanitised (`sanitize_tag`). Tagging is
+best-effort: if the cover embed fails the bot still sends the file with text
+tags.
+
+**Collections** (album/playlist/show/artist): only when
+`SPOTIFY_ENABLE_COLLECTIONS=true` **and** Web API credentials are configured
+(the API is needed to enumerate tracks). Up to `SPOTIFY_MAX_ITEMS` items are
+resolved, matched and downloaded sequentially through `links.download_flow`;
+per-item failures are counted and reported.
+
+**Health**: `/health` shows `Spotify: off` or `on [sources] api|no-api`, and the
+masked `PROXY_URL_SPOTIFY` override appears in the proxy summary.

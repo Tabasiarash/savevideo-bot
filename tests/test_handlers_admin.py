@@ -85,6 +85,7 @@ async def test_health(services, make_message, monkeypatch):
         "Upload limit: 50 MB",
         "Bot API: cloud",
         "Data dir: n/a",
+        "Spotify: off",
     ):
         assert expected in body
 
@@ -143,6 +144,17 @@ async def test_health_reports_platform_proxy_and_exit_ip(services, make_message,
     body = msg.sent[0]
     assert "tt=socks5h://tt:1080" in body
     assert "Proxy exit: ✅ 203.0.*.*" in body
+
+
+async def test_spotify_status(monkeypatch):
+    monkeypatch.setattr(admin.settings, "enable_spotify", False)
+    assert admin._spotify_status() == "off"
+    monkeypatch.setattr(admin.settings, "enable_spotify", True)
+    monkeypatch.setattr(admin.settings, "spotify_match_sources", "youtube,soundcloud")
+    monkeypatch.setattr(admin.settings, "spotify_client_id", "")
+    assert admin._spotify_status() == "on [youtube,soundcloud] no-api"
+    monkeypatch.setattr(admin.settings, "spotify_client_id", "cid")
+    assert admin._spotify_status() == "on [youtube,soundcloud] api"
 
 
 async def test_parse_user_id():
