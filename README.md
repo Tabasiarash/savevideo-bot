@@ -182,9 +182,9 @@ current setup, run `/health` in Telegram: its **Egress** line performs a live,
 metadata-only yt-dlp call through the configured cookies/proxy and reports
 `✅ <title>` or a failure class (`bot-wall`, `network`, `timeout`, `no-formats`).
 
-### Works on a datacenter IP (free): cookies + PO-token provider + JS runtime
+### Works on a datacenter IP (free): cookies + JS runtime (built-in EJS)
 
-Three ingredients, all present in this repo, clear the wall with no paid proxy:
+Two ingredients clear the wall with no paid proxy:
 
 1. **Fresh cookies** from a logged-in Google/YouTube session in `COOKIES_FILE`
    (`/etc/savevideo-bot/yt_cookies.txt` on the systemd host, mounted
@@ -194,22 +194,16 @@ Three ingredients, all present in this repo, clear the wall with no paid proxy:
    scripts/refresh_cookies.py --profile-dir ~/.config/google-chrome/Default \
        --output /etc/savevideo-bot/yt_cookies.txt
    ```
-2. **PO-token provider** — the `bgutil-ytdlp-pot-provider` plugin is a pinned
-   dependency; the token *server* runs next to the bot:
-   ```bash
-   scripts/run-pot-provider.sh          # docker, listens on 127.0.0.1:4416
-   ```
-   docker-compose brings up the same server as the `bgutil` service and points
-   the bot at it via `YTDLP_EXTRA_ARGS`. **Keep the plugin and server versions
-   equal** (both currently `2.0.2`).
-3. **JS runtime** — yt-dlp needs a JS engine to solve YouTube's `n`/signature
-   challenge. `YTDLP_JS_RUNTIME=auto` (default) prefers Deno, then Node **>= 22**
+2. **JS runtime** — yt-dlp solves YouTube's `n`/signature challenge and mints the
+   proof-of-origin (PO) token with its bundled **EJS** solver. EJS runs inside the
+   yt-dlp process, so it honours `PROXY_URL` — no separate token server is
+   needed. `YTDLP_JS_RUNTIME=auto` (default) prefers Deno, then Node **>= 22**
    (older Node is skipped automatically); the Docker image ships Deno. Pin with
    `YTDLP_JS_RUNTIME=node` or `node:/usr/bin/node`.
 
-All three are required: the provider alone still hits the wall, and cookies alone
-return `Sign in…`. Cookies expire and automating an account carries some risk —
-refresh them when `/health` regresses to `bot-wall`.
+Cookies expire and automating an account carries some risk — refresh them when
+`/health` regresses to `bot-wall`. A non-datacenter egress (below) clears the
+wall without cookies.
 
 ### Alternative: a non-datacenter egress
 

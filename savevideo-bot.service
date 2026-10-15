@@ -34,8 +34,8 @@ RestrictAddressFamilies=AF_INET AF_INET6
 # all traffic through a home/Tailscale SOCKS egress at 100.x.y.z:
 #   IPAddressAllow=100.64.0.0/10 127.0.0.1
 #   IPAddressDeny=any
-# Left disabled by default because it breaks the public Bot API, DNS and the
-# bundled bgutil provider unless every needed address is listed.
+# Left disabled by default because it breaks the public Bot API and DNS unless
+# every needed address is listed.
 ReadWritePaths=/opt/savevideo-bot/data /opt/savevideo-bot/tmp /opt/savevideo-bot/.venv /srv/savevideo-links
 
 [Install]

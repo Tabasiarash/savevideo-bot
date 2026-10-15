@@ -121,7 +121,7 @@ If YouTube shows `bot-wall` on `/health`, add one of:
   is often already taken). Route only the sites that need it with
   `PROXY_URL_INSTAGRAM` / `PROXY_URL_TIKTOK` / `PROXY_URL_X` (each falls back to
   `PROXY_URL`).
-- **Fresh cookies + PO-token provider + JS runtime** — see the README
+- **Fresh cookies + JS runtime (built-in EJS)** — see the README
   ("Works on a datacenter IP").
 
 After changing these, restart and re-check `/health`. The egress probe result is

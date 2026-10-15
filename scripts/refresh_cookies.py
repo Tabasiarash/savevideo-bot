@@ -2,8 +2,8 @@
 """Export fresh YouTube login cookies from a local Chrome/Chromium profile.
 
 YouTube's "Sign in to confirm you're not a bot" wall on datacenter IPs is beaten
-by (a) fresh cookies from a logged-in account, (b) a running bgutil PO-token
-provider, and (c) a JS runtime. This script produces the cookies.txt for (a) by
+by (a) fresh cookies from a logged-in account and (b) a JS runtime (yt-dlp's
+built-in EJS PO-token solver). This script produces the cookies.txt for (a) by
 decrypting the browser's cookie store directly, which is handy on a headless box
 where `yt-dlp --cookies-from-browser` cannot unlock the OS keyring.
 
