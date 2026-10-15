@@ -189,11 +189,17 @@ async def find_match(
     sources: list[str] | None = None,
     breaker: Breaker | None = None,
     cookiejar_dir: Path | None = None,
+    exclude: set[str] | None = None,
 ) -> MatchResult:
-    """Search the configured sources and return the best candidate over the bar."""
+    """Search the configured sources and return the best candidate over the bar.
+
+    ``exclude`` holds candidate URLs to ignore (e.g. already offered to the user);
+    the next-best match is then returned so a wrong pick can be retried.
+    """
     if not meta.is_usable():
         return MatchResult(None, [])
 
+    skip = exclude or set()
     order = sources if sources is not None else list(DEFAULT_SOURCES)
     tol = settings.spotify_duration_tolerance_s
     min_score = settings.spotify_min_score
@@ -227,6 +233,8 @@ async def find_match(
             breaker.record_success(source)
 
         for candidate in candidates:
+            if candidate.url in skip:
+                continue
             candidate.score = score_candidate(meta, candidate, tol)
             if best is None or candidate.score > best.score:
                 best = candidate

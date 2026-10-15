@@ -97,6 +97,29 @@ async def test_find_match_picks_best_candidate():
     assert runner.calls[0][1]["playlist"] is True
 
 
+async def test_find_match_excludes_tried_candidate():
+    runner = StubRunner(
+        {
+            "ytsearch5": {
+                "entries": [
+                    _entry("Never Gonna Give You Up", "Rick Astley", 213, "https://youtu.be/good"),
+                    _entry("Never Gonna Give You Up", "Rick Astley", 213, "https://youtu.be/alt"),
+                ]
+            }
+        }
+    )
+    first = await matcher.find_match(runner, _settings(), META)
+    assert first.candidate is not None and first.candidate.url == "https://youtu.be/good"
+
+    second = await matcher.find_match(runner, _settings(), META, exclude={"https://youtu.be/good"})
+    assert second.candidate is not None and second.candidate.url == "https://youtu.be/alt"
+
+    none = await matcher.find_match(
+        runner, _settings(), META, exclude={"https://youtu.be/good", "https://youtu.be/alt"}
+    )
+    assert none.candidate is None
+
+
 async def test_find_match_falls_back_to_soundcloud():
     runner = StubRunner(
         {

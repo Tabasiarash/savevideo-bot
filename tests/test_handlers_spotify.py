@@ -118,6 +118,97 @@ async def test_track_match_presents_picker(services, make_message, monkeypatch, 
     assert flow.postprocess is not None
     assert any("Never Gonna Give You Up" in body for body in msg.edits)
     assert msg.markups[-1] is not None, "picker keyboard not attached"
+    rematch = msg.markups[-1].inline_keyboard[-1][0]
+    assert rematch.callback_data == f"sp:rematch:{TRACK_ID}"
+
+
+# -- rematch ----------------------------------------------------------------
+
+
+def _prime_state(monkeypatch, settings, match_results):
+    """Wire fake metadata + a match() that returns results in order."""
+    _enable(monkeypatch, settings)
+    seq = list(match_results)
+
+    async def fake_meta(*args, **kwargs):
+        return META
+
+    async def fake_match(*args, **kwargs):
+        return seq.pop(0)
+
+    monkeypatch.setattr(spotify.metadata, "fetch_metadata", fake_meta)
+    monkeypatch.setattr(spotify.matcher, "find_match", fake_match)
+
+
+def _cand(url: str) -> matcher.Candidate:
+    return matcher.Candidate(url, "Never Gonna Give You Up", "Rick Astley", 213.0, "youtube", 0.99)
+
+
+async def test_rematch_presents_another_candidate(services, make_message, monkeypatch, settings, make_callback):
+    from tests.conftest import USER_ID
+
+    spotify._matches.clear()
+    first = matcher.MatchResult(_cand("https://youtu.be/good"), ["youtube"], 0.99)
+    _prime_state(monkeypatch, settings, [first])
+
+    msg = make_message(text=TRACK_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+    assert links._pending[USER_ID].url == "https://youtu.be/good"
+
+    # Second find_match call (rematch) returns a different candidate.
+    async def fake_match_alt(*args, **kwargs):
+        return matcher.MatchResult(_cand("https://youtu.be/alt"), ["youtube"], 0.98)
+
+    monkeypatch.setattr(spotify.matcher, "find_match", fake_match_alt)
+
+    cb = make_callback(data=f"sp:rematch:{TRACK_ID}", message=msg)
+    await spotify.on_rematch(cb)
+
+    assert links._pending[USER_ID].url == "https://youtu.be/alt"
+    assert spotify._matches[USER_ID].excluded == {"https://youtu.be/good", "https://youtu.be/alt"}
+
+
+async def test_rematch_no_more_matches(services, make_message, monkeypatch, settings, make_callback):
+    from tests.conftest import USER_ID
+
+    spotify._matches.clear()
+    _prime_state(monkeypatch, settings, [matcher.MatchResult(_cand("https://youtu.be/good"), ["youtube"], 0.99)])
+
+    msg = make_message(text=TRACK_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    async def fake_none(*args, **kwargs):
+        return matcher.MatchResult(None, ["youtube", "soundcloud"], 0.2)
+
+    monkeypatch.setattr(spotify.matcher, "find_match", fake_none)
+    cb = make_callback(data=f"sp:rematch:{TRACK_ID}", message=msg)
+    await spotify.on_rematch(cb)
+
+    assert get_text("en", "spotify_no_more_matches") in msg.edits
+    assert links._pending[USER_ID].url == "https://youtu.be/good"  # unchanged
+
+
+async def test_rematch_without_state_alerts(services, make_message, monkeypatch, settings, make_callback):
+    spotify._matches.clear()
+    msg = make_message(text=TRACK_URL)
+    cb = make_callback(data=f"sp:rematch:{TRACK_ID}", message=msg)
+    await spotify.on_rematch(cb)
+    assert cb.answers and cb.answers[-1][1] is True  # alert shown
+    assert get_text("en", "expired_selection") in cb.answers[-1][0]
+
+
+async def test_rematch_stale_id_ignored(services, make_message, monkeypatch, settings, make_callback):
+    from tests.conftest import USER_ID
+
+    spotify._matches.clear()
+    _prime_state(monkeypatch, settings, [matcher.MatchResult(_cand("https://youtu.be/good"), ["youtube"], 0.99)])
+    msg = make_message(text=TRACK_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    cb = make_callback(data="sp:rematch:doesnotmatch", message=msg)
+    await spotify.on_rematch(cb)
+    assert cb.answers and cb.answers[-1][1] is True
+    assert links._pending[USER_ID].url == "https://youtu.be/good"
 
 
 # -- collections ------------------------------------------------------------

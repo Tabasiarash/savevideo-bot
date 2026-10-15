@@ -133,6 +133,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_thumbnail": "Thumbnail",
         "button_cancel": "Cancel",
         "button_best": "Best",
+        "button_try_another": "🎲 Try another match",
+        "spotify_no_more_matches": "❌ No other close match found.",
         "active_job": "You already have an active download. Please wait until it finishes.",
         "spotify_disabled": (
             "🎵 Spotify links can be matched to a downloadable copy, but this feature is "
@@ -272,6 +274,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_thumbnail": "Cover-Bild",
         "button_cancel": "Abbrechen",
         "button_best": "Beste",
+        "button_try_another": "🎲 Anderen Treffer versuchen",
+        "spotify_no_more_matches": "❌ Kein weiterer passender Treffer gefunden.",
         "active_job": "Du hast bereits einen aktiven Download. Bitte warte, bis er fertig ist.",
         "spotify_disabled": (
             "🎵 Spotify-Links können einer herunterladbaren Version zugeordnet werden, aber "
@@ -411,6 +415,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_thumbnail": "جلد",
         "button_cancel": "لغو",
         "button_best": "بهترین",
+        "button_try_another": "🎲 تطبیق دیگر را امتحان کن",
+        "spotify_no_more_matches": "❌ تطبیق نزدیک دیگری پیدا نشد.",
         "active_job": "شما یک دانلود فعال دارید. لطفاً تا پایان آن صبر کنید.",
         "spotify_disabled": (
             "🎵 لینک‌های اسپاتیفای می‌توانند به یک نسخه قابل دانلود تطبیق داده شوند، اما این "

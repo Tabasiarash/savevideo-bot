@@ -21,11 +21,12 @@ matched track is then downloaded and sent in turn.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 
 from bot.config import settings
 from bot.db import url_hash
@@ -47,6 +48,25 @@ _breaker = Breaker(threshold=3, cooldown=300.0)
 
 # Containers we can write tags into.
 _AUDIO_SUFFIXES = tagger.SUPPORTED_SUFFIXES
+
+# Callback data for the "try another match" button.
+_REMATCH_PREFIX = "sp:rematch"
+
+
+@dataclass
+class _MatchState:
+    """Enough context to re-run matching for an already-presented track."""
+
+    ref: urls.SpotifyRef
+    meta: metadata.TrackMeta
+    tmpdir: Path
+    lang: str
+    status_message: Message
+    excluded: set[str] = field(default_factory=set)
+
+
+# At most one active Spotify match per user (rate limiting prevents overlap).
+_matches: dict[int, _MatchState] = {}
 
 
 def first_spotify_url(value: str | None) -> str | None:
@@ -132,7 +152,7 @@ async def _fetch_meta(ref) -> metadata.TrackMeta | None:
         return None
 
 
-async def _match(meta: metadata.TrackMeta, tmpdir: Path):
+async def _match(meta: metadata.TrackMeta, tmpdir: Path, *, exclude: set[str] | None = None):
     srv = get_services()
     return await matcher.find_match(
         srv.runner,
@@ -141,6 +161,7 @@ async def _match(meta: metadata.TrackMeta, tmpdir: Path):
         sources=settings.spotify_sources(),
         breaker=_breaker,
         cookiejar_dir=tmpdir,
+        exclude=exclude,
     )
 
 
@@ -164,7 +185,31 @@ async def _handle_track(message: Message, ref, lang: str, status: Message) -> No
         cleanup_dir(tmpdir)
         return
 
-    await _present(message, ref, meta, candidate, tmpdir, lang, status)
+    state = _MatchState(ref=ref, meta=meta, tmpdir=tmpdir, lang=lang, status_message=status)
+    _matches[user.id] = state
+    await _present(state, candidate)
+
+
+@router.callback_query(F.data.startswith(_REMATCH_PREFIX))
+async def on_rematch(callback: CallbackQuery) -> None:
+    """Re-run the source search, skipping candidates already offered."""
+    user = callback.from_user
+    state = _matches.get(user.id)
+    if state is None or callback.data != f"{_REMATCH_PREFIX}:{state.ref.id}":
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        return
+
+    await callback.answer()
+    await links.edit_message(message=state.status_message, body=text(state.lang, "spotify_searching"))
+
+    result = await _match(state.meta, state.tmpdir, exclude=state.excluded)
+    candidate = result.candidate
+    if candidate is None:
+        log.info("spotify no more matches id=%s tried=%s", state.ref.id, result.tried)
+        await links.edit_message(message=state.status_message, body=text(state.lang, "spotify_no_more_matches"))
+        return
+
+    await _present(state, candidate)
 
 
 def _audio_meta(meta: metadata.TrackMeta, cover_path: Path) -> links.AudioMeta:
@@ -217,17 +262,18 @@ async def _download_cover(url: str | None, dest: Path) -> Path | None:
     return None
 
 
-async def _present(
-    message: Message,
-    ref,
-    meta: metadata.TrackMeta,
-    candidate: matcher.Candidate,
-    tmpdir: Path,
-    lang: str,
-    status: Message,
-) -> None:
-    user = message.from_user
-    assert user is not None
+async def _present(state: _MatchState, candidate: matcher.Candidate) -> None:
+    user = state.status_message.from_user
+    if user is None:
+        return
+
+    # Track shown candidates so rematch can skip them.
+    state.excluded.add(candidate.url)
+
+    ref = state.ref
+    meta = state.meta
+    tmpdir = state.tmpdir
+    lang = state.lang
 
     info = {
         "id": ref.id,
@@ -247,7 +293,7 @@ async def _present(
         prefix="dl",
         playlist_items=None,
         lang=lang,
-        status_message=status,
+        status_message=state.status_message,
         cache_key=url_hash(f"spotify:{ref.id}"),
         audio_meta=_audio_meta(meta, cover_path),
         postprocess=_make_postprocess(meta, cover_path),
@@ -261,8 +307,18 @@ async def _present(
         artist=meta.artist_line() or candidate.uploader or "?",
         source=candidate.source,
     )
-    await links.edit_message(message=status, body=body, reply_markup=links.picker_keyboard(flow))
 
+    kb = links.picker_keyboard(flow)
+    kb.inline_keyboard.append(
+        [
+            InlineKeyboardButton(
+                text=text(lang, "button_try_another"),
+                callback_data=f"{_REMATCH_PREFIX}:{ref.id}",
+            )
+        ]
+    )
+
+    await links.edit_message(message=state.status_message, body=body, reply_markup=kb)
 
 async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status: Message) -> None:
     srv = get_services()
