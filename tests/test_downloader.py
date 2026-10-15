@@ -281,6 +281,27 @@ def test_extra_args_uses_platform_proxy(monkeypatch):
     assert args[args.index("--proxy") + 1] == "socks5h://x:1080"
 
 
+def test_extra_args_explicit_proxy_overrides_host(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(proxy_url="socks5h://base:1080", proxy_url_x="socks5h://x:1080"))
+    args = runner._extra_args(
+        playlist=False,
+        playlist_items=None,
+        url="ytsearch5:query",  # no host -> would otherwise use the base proxy
+        proxy="socks5h://explicit:9",
+    )
+    assert args[args.index("--proxy") + 1] == "socks5h://explicit:9"
+
+
+def test_extra_args_empty_explicit_proxy_disables_proxy(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings(proxy_url="socks5h://base:1080"))
+    args = runner._extra_args(
+        playlist=False, playlist_items=None, url="https://soundcloud.com/a/b", proxy=""
+    )
+    assert "--proxy" not in args
+
+
 def test_force_ipv6_only_for_youtube(monkeypatch):
     _no_js(monkeypatch)
     runner = YtDlpRunner(_settings(force_ipv6=True))

@@ -133,6 +133,7 @@ class YtDlpRunner:
         playlist_items: str | None,
         url: str | None = None,
         cookiejar_dir: Path | None = None,
+        proxy: str | None = None,
     ) -> list[str]:
         args = ["--no-warnings", "--no-colors", "--newline", "-q"]
         if playlist:
@@ -142,9 +143,11 @@ class YtDlpRunner:
         else:
             args += ["--no-playlist"]
         args += self._cookie_args(cookiejar_dir)
-        proxy = _platform_proxy(self.settings, url)
-        if proxy:
-            args += ["--proxy", proxy]
+        # An explicit proxy (e.g. the Spotify matcher picking a search source's
+        # own egress) wins over the host-derived platform default.
+        chosen = proxy if proxy is not None else _platform_proxy(self.settings, url)
+        if chosen:
+            args += ["--proxy", chosen]
         # The IP-family overrides can fight the proxy's routing, so only apply
         # them when talking to the origin directly.
         elif self.settings.force_ipv4:
@@ -208,6 +211,7 @@ class YtDlpRunner:
         playlist: bool = False,
         playlist_items: str | None = None,
         cookiejar_dir: Path | None = None,
+        proxy: str | None = None,
     ) -> dict[str, Any]:
         """Extract metadata as a dict (``yt-dlp -J``). Raises :class:`InfoError`."""
         args = [
@@ -217,7 +221,11 @@ class YtDlpRunner:
             "-J",
             "--skip-download",
             *self._extra_args(
-                playlist=playlist, playlist_items=playlist_items, url=url, cookiejar_dir=cookiejar_dir
+                playlist=playlist,
+                playlist_items=playlist_items,
+                url=url,
+                cookiejar_dir=cookiejar_dir,
+                proxy=proxy,
             ),
             url,
         ]
