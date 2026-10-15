@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field
 from urllib.parse import quote
 
 from .http import fetch, post_form
-from .urls import OPEN_HOST, SpotifyRef
+from .urls import OPEN_HOST, SpotifyRef, is_spotify_api, is_spotify_host
 
 META_TTL_S = 24 * 60 * 60
 _API_TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -185,7 +185,7 @@ def from_api(payload: dict, ref: SpotifyRef) -> TrackMeta:
 
 async def _from_oembed(ref: SpotifyRef, proxy: str | None) -> TrackMeta | None:
     url = f"https://{OPEN_HOST}/oembed?url={quote(ref.canonical, safe='')}"
-    resp = await fetch(url, proxy=proxy, allow_redirects=True)
+    resp = await fetch(url, proxy=proxy, allow_redirects=True, is_allowed=is_spotify_host)
     if resp.status != 200:
         return None
     try:
@@ -196,7 +196,7 @@ async def _from_oembed(ref: SpotifyRef, proxy: str | None) -> TrackMeta | None:
 
 
 async def _from_page(ref: SpotifyRef, proxy: str | None) -> TrackMeta | None:
-    resp = await fetch(ref.canonical, proxy=proxy, allow_redirects=True)
+    resp = await fetch(ref.canonical, proxy=proxy, allow_redirects=True, is_allowed=is_spotify_host)
     if resp.status != 200 or not resp.text:
         return None
     return from_page(resp.text, ref)
@@ -224,6 +224,7 @@ async def _from_api(ref: SpotifyRef, client_id: str, client_secret: str, proxy: 
         f"{_API_BASE}/{ref.kind}s/{ref.id}",
         proxy=proxy,
         allow_redirects=True,
+        is_allowed=is_spotify_api,
         headers={"Authorization": f"Bearer {token}"},
     )
     if resp.status != 200:
@@ -318,6 +319,7 @@ async def list_collection_tracks(
             f"{_API_BASE}/artists/{ref.id}/top-tracks?market=US",
             proxy=proxy,
             allow_redirects=True,
+            is_allowed=is_spotify_api,
             headers=headers,
         )
         if resp.status != 200:
@@ -336,7 +338,7 @@ async def list_collection_tracks(
     url = f"{_API_BASE}/{path}/{ref.id}/{sub}?limit=50"
     out: list[SpotifyRef] = []
     while url and len(out) < limit:
-        resp = await fetch(url, proxy=proxy, allow_redirects=True, headers=headers)
+        resp = await fetch(url, proxy=proxy, allow_redirects=True, is_allowed=is_spotify_api, headers=headers)
         if resp.status != 200:
             break
         try:

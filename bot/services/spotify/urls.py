@@ -17,6 +17,9 @@ from urllib.parse import urlsplit
 from .http import fetch
 
 OPEN_HOST = "open.spotify.com"
+_API_HOSTS = frozenset({"api.spotify.com", "accounts.spotify.com"})
+# Image/metadata CDNs Spotify serves covers and page assets from.
+_CDN_SUFFIXES = (".scdn.co", ".spotifycdn.com")
 _SHORT_HOSTS = frozenset({"spotify.link", "spoti.fi", "link.spotify.com"})
 _SPOTIFY_HOSTS = frozenset({OPEN_HOST, "play.spotify.com", "open.spotify.com"}) | _SHORT_HOSTS
 
@@ -57,6 +60,22 @@ def is_spotify_url(url: str) -> bool:
 
 def is_short_link(url: str) -> bool:
     return spotify_host((url or "").strip()) in _SHORT_HOSTS
+
+
+def is_spotify_host(url: str) -> bool:
+    """True for the public Spotify hosts a metadata fetch may land on."""
+    return spotify_host((url or "").strip()) in _SPOTIFY_HOSTS
+
+
+def is_spotify_api(url: str) -> bool:
+    """True for Spotify's Web API / token hosts."""
+    return spotify_host((url or "").strip()) in _API_HOSTS
+
+
+def is_spotify_cdn(url: str) -> bool:
+    """True for Spotify's cover/asset CDNs (``*.scdn.co``, ``*.spotifycdn.com``)."""
+    host = spotify_host((url or "").strip())
+    return bool(host) and host.endswith(_CDN_SUFFIXES)
 
 
 def parse_spotify_url(url: str) -> SpotifyRef | None:

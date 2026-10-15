@@ -199,7 +199,11 @@ async def _download_cover(url: str | None, dest: Path) -> Path | None:
 
     try:
         resp = await spotify_http.fetch(
-            url, proxy=settings.proxy_for_spotify(), allow_redirects=True, max_bytes=5_000_000
+            url,
+            proxy=settings.proxy_for_spotify(),
+            allow_redirects=True,
+            is_allowed=urls.is_spotify_cdn,
+            max_bytes=5_000_000,
         )
     except Exception:  # noqa: BLE001
         return None
