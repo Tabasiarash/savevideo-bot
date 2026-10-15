@@ -21,6 +21,20 @@ class HttpResponse:
     headers: dict[str, str]
     text: str
     url: str
+    content: bytes = b""
+
+
+def _to_response(resp, max_bytes: int) -> HttpResponse:
+    content = resp.content or b""
+    if len(content) > max_bytes:
+        content = content[:max_bytes]
+    return HttpResponse(
+        status=int(resp.status_code),
+        headers={k.lower(): v for k, v in dict(resp.headers).items()},
+        text=content.decode("utf-8", "replace"),
+        url=str(resp.url),
+        content=content,
+    )
 
 
 def _fetch_blocking(
@@ -45,15 +59,7 @@ def _fetch_blocking(
         allow_redirects=allow_redirects,
         headers=merged,
     )
-    content = resp.content or b""
-    if len(content) > max_bytes:
-        content = content[:max_bytes]
-    return HttpResponse(
-        status=int(resp.status_code),
-        headers={k.lower(): v for k, v in dict(resp.headers).items()},
-        text=content.decode("utf-8", "replace"),
-        url=str(resp.url),
-    )
+    return _to_response(resp, max_bytes)
 
 
 async def fetch(
@@ -92,15 +98,7 @@ def _post_form_blocking(
 
     proxies = {"http": proxy, "https": proxy} if proxy else None
     resp = requests.post(url, data=data, proxies=proxies, timeout=timeout)
-    content = resp.content or b""
-    if len(content) > max_bytes:
-        content = content[:max_bytes]
-    return HttpResponse(
-        status=int(resp.status_code),
-        headers={k.lower(): v for k, v in dict(resp.headers).items()},
-        text=content.decode("utf-8", "replace"),
-        url=str(resp.url),
-    )
+    return _to_response(resp, max_bytes)
 
 
 async def post_form(

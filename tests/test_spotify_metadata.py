@@ -151,3 +151,41 @@ async def test_fetch_metadata_uses_api_for_isrc(monkeypatch, db):
     assert meta is not None
     assert meta.isrc == "GBARL9300135"
     assert "api" in meta.provider
+
+
+async def test_list_collection_requires_credentials(db):
+    album = SpotifyRef("album", "abc", "https://open.spotify.com/album/abc")
+    assert await metadata.list_collection_tracks(db, album) == []
+
+
+async def test_list_collection_album(monkeypatch, db):
+    album = SpotifyRef("album", "abc", "https://open.spotify.com/album/abc")
+    page = '{"items": [{"id": "t1", "type": "track"}, {"id": "t2", "type": "track"}], "next": null}'
+
+    async def fake_post_form(url, data, **kwargs):
+        return SimpleNamespace(status=200, headers={}, text='{"access_token": "tok"}', url=url)
+
+    async def fake_fetch(url, **kwargs):
+        return SimpleNamespace(status=200, headers={}, text=page, url=url)
+
+    monkeypatch.setattr(metadata, "post_form", fake_post_form)
+    monkeypatch.setattr(metadata, "fetch", fake_fetch)
+    refs = await metadata.list_collection_tracks(db, album, client_id="c", client_secret="s", limit=10)
+    assert [r.id for r in refs] == ["t1", "t2"]
+    assert all(r.kind == "track" for r in refs)
+
+
+async def test_list_collection_playlist_unwraps_track(monkeypatch, db):
+    playlist = SpotifyRef("playlist", "p1", "https://open.spotify.com/playlist/p1")
+    page = '{"items": [{"track": {"id": "t1", "type": "track"}}], "next": null}'
+
+    async def fake_post_form(url, data, **kwargs):
+        return SimpleNamespace(status=200, headers={}, text='{"access_token": "tok"}', url=url)
+
+    async def fake_fetch(url, **kwargs):
+        return SimpleNamespace(status=200, headers={}, text=page, url=url)
+
+    monkeypatch.setattr(metadata, "post_form", fake_post_form)
+    monkeypatch.setattr(metadata, "fetch", fake_fetch)
+    refs = await metadata.list_collection_tracks(db, playlist, client_id="c", client_secret="s", limit=10)
+    assert [r.id for r in refs] == ["t1"]

@@ -133,6 +133,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_cancel": "Cancel",
         "button_best": "Best",
         "active_job": "You already have an active download. Please wait until it finishes.",
+        "spotify_disabled": (
+            "🎵 Spotify links can be matched to a downloadable copy, but this feature is "
+            "currently disabled. Spotify audio itself is DRM-protected and never downloaded."
+        ),
+        "spotify_reading": "🎵 Reading Spotify metadata…",
+        "spotify_searching": "🔎 Finding this track on a downloadable source…",
+        "spotify_bad_link": "❌ I couldn't understand that Spotify link.",
+        "spotify_no_metadata": "❌ Could not read metadata for this Spotify item.",
+        "spotify_no_match": "❌ I couldn't find a matching downloadable copy of this track.",
+        "spotify_pick": "🎵 <b>{title}</b>\n👤 {artist}\n\nFound on {source}. Pick an audio format:",
+        "spotify_collections_disabled": "❌ Album and playlist links are disabled. Send a single track link.",
+        "spotify_collection_needs_api": (
+            "❌ Expanding albums or playlists needs Spotify API credentials "
+            "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
+        ),
+        "spotify_collection_found": "🎵 This collection has {count} items; processing up to {max}.",
+        "spotify_collection_done": "✅ Done: {ok} track(s) sent, {fail} failed.",
+        "spotify_match_source": "🔗 Matched on {source}.",
         "expired_selection": "This selection expired. Send the link again.",
         "sending_from_cache": "⚡ Resending from cache…",
         "inline_article_title": "Open in bot to download",
@@ -253,6 +271,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_cancel": "Abbrechen",
         "button_best": "Beste",
         "active_job": "Du hast bereits einen aktiven Download. Bitte warte, bis er fertig ist.",
+        "spotify_disabled": (
+            "🎵 Spotify-Links können einer herunterladbaren Version zugeordnet werden, aber "
+            "diese Funktion ist derzeit deaktiviert. Spotify-Audio selbst ist DRM-geschützt "
+            "und wird nie heruntergeladen."
+        ),
+        "spotify_reading": "🎵 Spotify-Metadaten werden gelesen…",
+        "spotify_searching": "🔎 Dieser Titel wird auf einer herunterladbaren Quelle gesucht…",
+        "spotify_bad_link": "❌ Dieser Spotify-Link konnte nicht verstanden werden.",
+        "spotify_no_metadata": "❌ Metadaten für dieses Spotify-Element konnten nicht gelesen werden.",
+        "spotify_no_match": "❌ Es wurde keine passende herunterladbare Version dieses Titels gefunden.",
+        "spotify_pick": "🎵 <b>{title}</b>\n👤 {artist}\n\nGefunden auf {source}. Wähle ein Audioformat:",
+        "spotify_collections_disabled": "❌ Album- und Playlist-Links sind deaktiviert. Sende einen einzelnen Titel-Link.",
+        "spotify_collection_needs_api": (
+            "❌ Zum Auflösen von Alben oder Playlists werden Spotify-API-Zugangsdaten benötigt "
+            "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
+        ),
+        "spotify_collection_found": "🎵 Diese Sammlung hat {count} Elemente; es werden bis zu {max} verarbeitet.",
+        "spotify_collection_done": "✅ Fertig: {ok} Titel gesendet, {fail} fehlgeschlagen.",
+        "spotify_match_source": "🔗 Zugeordnet auf {source}.",
         "expired_selection": "Diese Auswahl ist abgelaufen. Sende den Link erneut.",
         "sending_from_cache": "⚡ Erneut aus dem Cache gesendet…",
         "inline_article_title": "Im Bot öffnen und herunterladen",
@@ -372,6 +409,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_cancel": "لغو",
         "button_best": "بهترین",
         "active_job": "شما یک دانلود فعال دارید. لطفاً تا پایان آن صبر کنید.",
+        "spotify_disabled": (
+            "🎵 لینک‌های اسپاتیفای می‌توانند به یک نسخه قابل دانلود تطبیق داده شوند، اما این "
+            "قابلیت فعلاً غیرفعال است. صدای خود اسپاتیفای با DRM محافظت می‌شود و هرگز دانلود نمی‌شود."
+        ),
+        "spotify_reading": "🎵 در حال خواندن اطلاعات اسپاتیفای…",
+        "spotify_searching": "🔎 در حال یافتن این آهنگ در یک منبع قابل دانلود…",
+        "spotify_bad_link": "❌ لینک اسپاتیفای قابل تشخیص نبود.",
+        "spotify_no_metadata": "❌ خواندن اطلاعات این مورد اسپاتیفای ممکن نشد.",
+        "spotify_no_match": "❌ نسخه قابل دانلود منطبقی برای این آهنگ پیدا نشد.",
+        "spotify_pick": "🎵 <b>{title}</b>\n👤 {artist}\n\nدر {source} پیدا شد. یک فرمت صوتی انتخاب کنید:",
+        "spotify_collections_disabled": "❌ لینک آلبوم و پلی‌لیست غیرفعال است. یک لینک تک‌آهنگ بفرستید.",
+        "spotify_collection_needs_api": (
+            "❌ برای بازکردن آلبوم‌ها یا پلی‌لیست‌ها به اطلاعات API اسپاتیفای نیاز است "
+            "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
+        ),
+        "spotify_collection_found": "🎵 این مجموعه {count} مورد دارد؛ تا {max} مورد پردازش می‌شود.",
+        "spotify_collection_done": "✅ انجام شد: {ok} آهنگ ارسال شد، {fail} ناموفق.",
+        "spotify_match_source": "🔗 در {source} تطبیق داده شد.",
         "expired_selection": "این انتخاب منقضی شده است. دوباره لینک را بفرستید.",
         "sending_from_cache": "⚡ ارسال مجدد از کش…",
         "inline_article_title": "برای دانلود در ربات باز کنید",

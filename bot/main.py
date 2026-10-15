@@ -16,7 +16,7 @@ from aiogram.enums import ParseMode
 
 from bot.config import settings
 from bot.deps import init_services
-from bot.handlers import admin, inline, links, start
+from bot.handlers import admin, inline, links, spotify, start
 from bot.services.updater import auto_update_loop
 
 logging.basicConfig(
@@ -67,10 +67,15 @@ def build_dispatcher() -> Dispatcher:
     Command routers (``start``, ``admin``) MUST come before ``links``: the
     latter has a catch-all ``F.text`` handler that would otherwise swallow every
     command and reply "Unknown command".
+
+    ``spotify`` also comes before ``links`` (and is registered even when the
+    feature is off) so Spotify URLs never reach the generic link handler; its
+    filter only matches messages that contain a Spotify URL.
     """
     dp = Dispatcher()
     dp.include_router(start.router)
     dp.include_router(admin.router)
+    dp.include_router(spotify.router)
     dp.include_router(links.router)
     dp.include_router(inline.router)
     return dp

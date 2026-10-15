@@ -28,6 +28,13 @@ META_TTL_S = 24 * 60 * 60
 _API_TOKEN_URL = "https://accounts.spotify.com/api/token"
 _API_BASE = "https://api.spotify.com/v1"
 
+# kind -> (endpoint segment, sub-resource, is paginated), for listing a collection.
+_COLLECTION_ENDPOINTS = {
+    "album": ("albums", "tracks"),
+    "playlist": ("playlists", "tracks"),
+    "show": ("shows", "episodes"),
+}
+
 _TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
 _ATTR_RE = re.compile(r"([a-zA-Z:_-]+)\s*=\s*[\"']([^\"']*)[\"']")
 _OG_TITLE_BY = re.compile(
@@ -272,3 +279,75 @@ async def fetch_metadata(
         with contextlib.suppress(Exception):
             await db.spotify_meta_put(ref.id, ref.kind, merged.to_json())
     return merged
+
+
+def _entry_to_ref(kind: str, entry: dict) -> SpotifyRef | None:
+    item = entry.get("track") or entry.get("item") or entry
+    if not isinstance(item, dict):
+        return None
+    sid = item.get("id")
+    item_kind = item.get("type") or ("episode" if kind == "show" else "track")
+    if not sid:
+        return None
+    return SpotifyRef(str(item_kind), str(sid), f"https://{OPEN_HOST}/{item_kind}/{sid}")
+
+
+async def list_collection_tracks(
+    db,
+    ref: SpotifyRef,
+    *,
+    proxy: str | None = None,
+    client_id: str = "",
+    client_secret: str = "",
+    limit: int = 25,
+) -> list[SpotifyRef]:
+    """Resolve an album/playlist/show (or artist top tracks) to track refs.
+
+    Requires the Web API (client credentials); returns ``[]`` when they are
+    missing or the API rejects the request — the caller then tells the user.
+    """
+    if limit <= 0 or not (client_id and client_secret):
+        return []
+    token = await _api_token(client_id, client_secret, proxy)
+    if not token:
+        return []
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if ref.kind == "artist":
+        resp = await fetch(
+            f"{_API_BASE}/artists/{ref.id}/top-tracks?market=US",
+            proxy=proxy,
+            allow_redirects=True,
+            headers=headers,
+        )
+        if resp.status != 200:
+            return []
+        try:
+            data = json.loads(resp.text)
+        except (TypeError, ValueError):
+            return []
+        refs = [r for item in (data.get("tracks") or [])[:limit] if (r := _entry_to_ref("artist", item))]
+        return refs
+
+    endpoint = _COLLECTION_ENDPOINTS.get(ref.kind)
+    if endpoint is None:
+        return []
+    path, sub = endpoint
+    url = f"{_API_BASE}/{path}/{ref.id}/{sub}?limit=50"
+    out: list[SpotifyRef] = []
+    while url and len(out) < limit:
+        resp = await fetch(url, proxy=proxy, allow_redirects=True, headers=headers)
+        if resp.status != 200:
+            break
+        try:
+            data = json.loads(resp.text)
+        except (TypeError, ValueError):
+            break
+        for item in data.get("items") or []:
+            resolved = _entry_to_ref(ref.kind, item)
+            if resolved is not None:
+                out.append(resolved)
+                if len(out) >= limit:
+                    break
+        url = (data.get("next") or "") if len(out) < limit else ""
+    return out[:limit]

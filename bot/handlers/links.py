@@ -737,6 +737,21 @@ def make_tmpdir(user_id: int) -> Path:
     return tmpdir
 
 
+def remember_flow(user_id: int, flow: PendingFlow) -> None:
+    """Register a prepared flow so the shared picker callbacks can act on it."""
+    _pending[user_id] = flow
+
+
+def picker_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
+    """Build the format picker keyboard for a prepared flow."""
+    return _build_keyboard(flow)
+
+
+async def edit_message(*, message: Message | None, body: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
+    """Public wrapper around the internal safe-edit helper."""
+    await _edit(message=message, body=body, reply_markup=reply_markup)
+
+
 def _choose_text(flow: PendingFlow) -> str:
     if not flow.title:
         return text(flow.lang, "choose_format_no_meta")

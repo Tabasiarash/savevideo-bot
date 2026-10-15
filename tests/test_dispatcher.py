@@ -164,6 +164,15 @@ async def test_url_text_reaches_format_picker(services, dispatcher, aiogram_bot)
     assert any(name == "EditMessageText" for name, _, _ in got), "picker edit not sent"
 
 
+async def test_spotify_link_intercepted_even_when_disabled(services, dispatcher, aiogram_bot):
+    # With the feature off the Spotify router still answers (DRM message); the
+    # link must never fall through to the generic link flow.
+    await feed(dispatcher, aiogram_bot, "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")
+    sent = texts(aiogram_bot)
+    assert get_text("en", "spotify_disabled") in sent
+    assert get_text("en", "url_fetching") not in sent
+
+
 async def test_admin_command_as_non_admin_denied(services, dispatcher, aiogram_bot):
     await feed(dispatcher, aiogram_bot, "/stats", user_id=USER_ID)
     assert get_text("en", "not_allowed") in texts(aiogram_bot)
