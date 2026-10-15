@@ -144,6 +144,43 @@ def _cand(url: str) -> matcher.Candidate:
     return matcher.Candidate(url, "Never Gonna Give You Up", "Rick Astley", 213.0, "youtube", 0.99)
 
 
+class _BotStatusMessage:
+    """Mimics a message the *bot* sent: no from_user (unlike the user's message)."""
+
+    def __init__(self) -> None:
+        self.from_user = None
+        self.edits: list[str] = []
+        self.markups: list[object] = []
+
+    async def edit_text(self, body, reply_markup=None, **kwargs):
+        self.edits.append(body)
+        self.markups.append(reply_markup)
+
+
+async def test_present_keys_flow_by_user_not_status_message(
+    services, make_message, monkeypatch, settings
+):
+    """Regression: the status message is the bot's, so its from_user must not be
+    used to key the flow (that would file it under the bot and break the buttons)."""
+    from tests.conftest import USER_ID
+
+    spotify._matches.clear()
+    _prime_state(monkeypatch, settings, [matcher.MatchResult(_cand("https://youtu.be/good"), ["youtube"], 0.99)])
+
+    status = _BotStatusMessage()
+    msg = make_message(text=TRACK_URL)
+
+    async def fake_answer(body, reply_markup=None, **kwargs):
+        return status
+
+    monkeypatch.setattr(msg, "answer", fake_answer, raising=False)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    assert links._pending.get(USER_ID) is not None
+    assert links._pending[USER_ID].url == "https://youtu.be/good"
+    assert any("Never Gonna Give You Up" in body for body in status.edits)
+
+
 async def test_rematch_presents_another_candidate(services, make_message, monkeypatch, settings, make_callback):
     from tests.conftest import USER_ID
 

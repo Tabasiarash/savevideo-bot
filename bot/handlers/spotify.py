@@ -57,6 +57,7 @@ _REMATCH_PREFIX = "sp:rematch"
 class _MatchState:
     """Enough context to re-run matching for an already-presented track."""
 
+    user_id: int
     ref: urls.SpotifyRef
     meta: metadata.TrackMeta
     tmpdir: Path
@@ -185,7 +186,9 @@ async def _handle_track(message: Message, ref, lang: str, status: Message) -> No
         cleanup_dir(tmpdir)
         return
 
-    state = _MatchState(ref=ref, meta=meta, tmpdir=tmpdir, lang=lang, status_message=status)
+    state = _MatchState(
+        user_id=user.id, ref=ref, meta=meta, tmpdir=tmpdir, lang=lang, status_message=status
+    )
     _matches[user.id] = state
     await _present(state, candidate)
 
@@ -263,9 +266,7 @@ async def _download_cover(url: str | None, dest: Path) -> Path | None:
 
 
 async def _present(state: _MatchState, candidate: matcher.Candidate) -> None:
-    user = state.status_message.from_user
-    if user is None:
-        return
+    user_id = state.user_id
 
     # Track shown candidates so rematch can skip them.
     state.excluded.add(candidate.url)
@@ -298,7 +299,7 @@ async def _present(state: _MatchState, candidate: matcher.Candidate) -> None:
         audio_meta=_audio_meta(meta, cover_path),
         postprocess=_make_postprocess(meta, cover_path),
     )
-    links.remember_flow(user.id, flow)
+    links.remember_flow(user_id, flow)
 
     body = text(
         lang,
