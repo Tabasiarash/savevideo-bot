@@ -208,6 +208,20 @@ async def test_users_command_as_non_admin_denied(services, dispatcher, aiogram_b
     assert get_text("en", "not_allowed") in texts(aiogram_bot)
 
 
+async def test_cleanup_command_as_admin_responds(services, dispatcher, aiogram_bot):
+    await feed(dispatcher, aiogram_bot, "/cleanup", user_id=ADMIN_ID)
+    sent = texts(aiogram_bot)
+    assert sent, "admin got no /cleanup reply"
+    assert get_text("en", "unknown_command") not in sent
+    assert get_text("en", "not_allowed") not in sent
+    assert any("🧹" in body for body in sent)
+
+
+async def test_cleanup_command_as_non_admin_denied(services, dispatcher, aiogram_bot):
+    await feed(dispatcher, aiogram_bot, "/cleanup", user_id=USER_ID)
+    assert get_text("en", "not_allowed") in texts(aiogram_bot)
+
+
 async def test_health_command_as_admin_responds(services, dispatcher, aiogram_bot):
     await feed(dispatcher, aiogram_bot, "/health", user_id=ADMIN_ID)
     sent = texts(aiogram_bot)

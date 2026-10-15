@@ -204,6 +204,59 @@ async def test_spotify_status(monkeypatch):
     assert admin._spotify_status() == "on [youtube,soundcloud] api"
 
 
+async def test_cleanup_denied_for_non_admin(services, make_message):
+    msg = make_message(user_id=NON_ADMIN)
+    await admin.cmd_cleanup(msg, _command(""))
+    assert "not an admin" in msg.sent[0].lower()
+
+
+async def test_cleanup_removes_temp_entries(services, make_message):
+    temp_dir = admin.settings.temp_dir_resolved
+    stale = temp_dir / "u1_stale"
+    stale.mkdir(parents=True)
+    (stale / "media.mp4").write_bytes(b"x" * 4096)
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_cleanup(msg, _command(""))
+    assert not stale.exists()
+    assert "Cleanup done" in msg.edits[-1]
+    assert "freed" in msg.edits[-1]
+
+
+async def test_cleanup_empty(services, make_message):
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_cleanup(msg, _command(""))
+    assert "Nothing to clean" in msg.edits[-1]
+
+
+async def test_cleanup_respects_age_argument(services, make_message):
+    import os
+    import time
+
+    temp_dir = admin.settings.temp_dir_resolved
+    fresh = temp_dir / "u1_fresh"
+    fresh.mkdir(parents=True)
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_cleanup(msg, _command("3600"))
+    assert fresh.exists()
+
+    old = temp_dir / "u1_old"
+    old.mkdir(parents=True)
+    old_time = time.time() - 7200
+    os.utime(old, (old_time, old_time))
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_cleanup(msg, _command("3600"))
+    assert not old.exists()
+
+
+async def test_parse_cleanup_age():
+    assert admin._parse_cleanup_age(None) == 0
+    assert admin._parse_cleanup_age("") == 0
+    assert admin._parse_cleanup_age("600") == 600
+    assert admin._parse_cleanup_age(" 60 ") == 60
+    assert admin._parse_cleanup_age("nope") == 0
+    assert admin._parse_cleanup_age("-5") == 0
+
+
 async def test_parse_user_id():
     assert admin._parse_user_id(" 123 ") == 123
     assert admin._parse_user_id("@alice") is None

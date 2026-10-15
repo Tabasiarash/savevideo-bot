@@ -517,3 +517,68 @@ async def test_probe_egress_caches_result(monkeypatch):
     await runner.probe_egress("https://www.youtube.com/watch?v=x")
     await runner.probe_egress("https://www.youtube.com/watch?v=x")
     assert calls["n"] == 1
+
+
+def test_dir_size_bytes_counts_nested_files(tmp_path):
+    root = tmp_path / "d"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.bin").write_bytes(b"x" * 100)
+    (root / "sub" / "b.bin").write_bytes(b"y" * 50)
+    assert dl.dir_size_bytes(root) == 150
+    assert dl.dir_size_bytes(root / "a.bin") == 100
+    assert dl.dir_size_bytes(tmp_path / "missing") == 0
+
+
+def test_sweep_temp_dir_removes_entries(tmp_path):
+    temp = tmp_path / "tmp"
+    temp.mkdir()
+    keep = temp / "live"
+    keep.mkdir()
+    (keep / "part").write_bytes(b"x" * 10)
+    stale = temp / "stale"
+    stale.mkdir()
+    (stale / "media.mp4").write_bytes(b"x" * 2048)
+    loose = temp / "loose.tmp"
+    loose.write_bytes(b"z" * 32)
+
+    result = dl.sweep_temp_dir(temp, protected=[keep])
+    assert result.removed == 2
+    assert result.freed_bytes == 2048 + 32
+    assert keep.exists()
+    assert not stale.exists()
+    assert not loose.exists()
+
+
+def test_sweep_temp_dir_respects_max_age(tmp_path):
+    import os
+    import time
+
+    temp = tmp_path / "tmp"
+    temp.mkdir()
+    fresh = temp / "fresh"
+    fresh.mkdir()
+    old = temp / "old"
+    old.mkdir()
+    old_time = time.time() - 7200
+    os.utime(old, (old_time, old_time))
+
+    result = dl.sweep_temp_dir(temp, max_age_s=3600)
+    assert result.removed == 1
+    assert fresh.exists()
+    assert not old.exists()
+
+
+def test_sweep_temp_dir_keeps_within_root(tmp_path):
+    temp = tmp_path / "tmp"
+    temp.mkdir()
+    links = temp / "links"
+    (links / "abc").mkdir(parents=True)
+    (links / "abc" / "file.mp4").write_bytes(b"x" * 10)
+
+    result = dl.sweep_temp_dir(temp, keep_within=[links])
+    assert result.removed == 0
+    assert (links / "abc" / "file.mp4").exists()
+
+
+def test_sweep_temp_dir_missing_dir(tmp_path):
+    assert dl.sweep_temp_dir(tmp_path / "nope").removed == 0

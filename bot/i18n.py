@@ -100,6 +100,18 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Showing {count} of most recent (limit {limit}):"
         ),
         "users_empty": "No users yet.",
+        "cleanup_running": "🧹 Cleaning temp directory…",
+        "cleanup_done": (
+            "🧹 <b>Cleanup done</b>\n"
+            "Removed {removed} entries, freed {freed}.\n"
+            "Temp dir: {temp_before} → {temp_now}\n"
+            "Free disk: {free_before} → {free_now}"
+        ),
+        "cleanup_empty": (
+            "🧹 <b>Nothing to clean</b>\n"
+            "Temp dir is already tidy ({temp_now} in use).\n"
+            "Free disk: {free_now}"
+        ),
         "broadcast_running": "Broadcasting…",
         "broadcast_done": "Broadcast finished: {ok} sent, {fail} failed, {blocked} blocked.",
         "broadcast_no_text": "Usage: /broadcast &lt;text&gt;",
@@ -248,6 +260,18 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Zeige {count} der neuesten (Limit {limit}):"
         ),
         "users_empty": "Noch keine Nutzer.",
+        "cleanup_running": "🧹 Temp-Verzeichnis wird bereinigt…",
+        "cleanup_done": (
+            "🧹 <b>Bereinigung abgeschlossen</b>\n"
+            "{removed} Einträge entfernt, {freed} freigegeben.\n"
+            "Temp-Verzeichnis: {temp_before} → {temp_now}\n"
+            "Freier Speicher: {free_before} → {free_now}"
+        ),
+        "cleanup_empty": (
+            "🧹 <b>Nichts zu bereinigen</b>\n"
+            "Das Temp-Verzeichnis ist bereits aufgeräumt ({temp_now} belegt).\n"
+            "Freier Speicher: {free_now}"
+        ),
         "broadcast_running": "Sende Nachricht an alle…",
         "broadcast_done": "Übertragung abgeschlossen: {ok} gesendet, {fail} fehlgeschlagen, {blocked} blockiert.",
         "broadcast_no_text": "Verwendung: /broadcast &lt;text&gt;",
@@ -396,6 +420,18 @@ _STRINGS: dict[str, dict[str, str]] = {
             "نمایش {count} مورد از جدیدترین‌ها (حد {limit}):"
         ),
         "users_empty": "هنوز کاربری وجود ندارد.",
+        "cleanup_running": "🧹 در حال پاک‌سازی پوشه موقت…",
+        "cleanup_done": (
+            "🧹 <b>پاک‌سازی انجام شد</b>\n"
+            "{removed} مورد حذف شد، {freed} آزاد شد.\n"
+            "پوشه موقت: {temp_before} → {temp_now}\n"
+            "فضای آزاد: {free_before} → {free_now}"
+        ),
+        "cleanup_empty": (
+            "🧹 <b>چیزی برای پاک‌سازی نیست</b>\n"
+            "پوشه موقت از قبل مرتب است ({temp_now} در حال استفاده).\n"
+            "فضای آزاد: {free_now}"
+        ),
         "broadcast_running": "در حال ارسال همگانی…",
         "broadcast_done": "ارسال همگانی پایان یافت: {ok} ارسال، {fail} ناموفق، {blocked} مسدود.",
         "broadcast_no_text": "روش استفاده: /broadcast &lt;متن&gt;",

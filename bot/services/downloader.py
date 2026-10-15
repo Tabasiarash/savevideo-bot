@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -799,6 +799,83 @@ def cleanup_dir(path: Path) -> None:
     """Recursively delete ``path`` if it exists."""
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    """Outcome of a temp-directory sweep."""
+
+    removed: int = 0
+    freed_bytes: int = 0
+
+
+def dir_size_bytes(path: Path) -> int:
+    """Total size of ``path`` (file or directory tree) in bytes."""
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for root, _dirs, files in os.walk(path, onerror=lambda _exc: None):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                continue
+    return total
+
+
+def sweep_temp_dir(
+    temp_dir: Path,
+    *,
+    max_age_s: float = 0,
+    protected: Iterable[Path] = (),
+    keep_within: Iterable[Path] = (),
+) -> SweepResult:
+    """Delete unused entries directly under ``temp_dir``.
+
+    An entry is kept when it is one of the ``protected`` directories (live
+    download flows), lives inside a ``keep_within`` root (e.g. the download-link
+    store), or is newer than ``max_age_s`` seconds (``0`` deletes at any age).
+    Returns how many entries were removed and how many bytes were reclaimed.
+    """
+    if not temp_dir.exists():
+        return SweepResult()
+
+    def _resolved(path: Path) -> Path:
+        try:
+            return path.resolve()
+        except OSError:
+            return path
+
+    temp_root = _resolved(temp_dir)
+    protected_set = {_resolved(p) for p in protected}
+    keep_roots = [root for root in (_resolved(r) for r in keep_within) if root != Path("/")]
+
+    now = time.time()
+    removed = 0
+    freed = 0
+    for entry in temp_dir.iterdir():
+        resolved = _resolved(entry)
+        if resolved == temp_root or resolved in protected_set:
+            continue
+        if any(resolved.is_relative_to(root) for root in keep_roots):
+            continue
+        try:
+            if max_age_s > 0 and now - entry.stat().st_mtime <= max_age_s:
+                continue
+        except OSError:
+            continue
+        size = dir_size_bytes(entry)
+        if entry.is_dir():
+            cleanup_dir(entry)
+        else:
+            with contextlib.suppress(OSError):
+                entry.unlink()
+        removed += 1
+        freed += size
+    return SweepResult(removed=removed, freed_bytes=freed)
 
 
 # --------------------------------------------------------------------------

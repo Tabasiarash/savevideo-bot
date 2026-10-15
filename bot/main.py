@@ -7,7 +7,6 @@ import contextlib
 import logging
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types
@@ -17,6 +16,8 @@ from aiogram.enums import ParseMode
 from bot.config import settings
 from bot.deps import init_services
 from bot.handlers import admin, inline, links, spotify, start
+from bot.handlers.common import active_temp_dirs
+from bot.services.downloader import sweep_temp_dir
 from bot.services.spotify.metadata import META_TTL_S
 from bot.services.updater import auto_update_loop
 
@@ -95,6 +96,7 @@ ADMIN_COMMANDS = [
     types.BotCommand(command="ban", description="Ban a user"),
     types.BotCommand(command="unban", description="Unban a user"),
     types.BotCommand(command="update_ytdlp", description="Update yt-dlp now"),
+    types.BotCommand(command="cleanup", description="Free temp disk space"),
     types.BotCommand(command="health", description="Health / environment report"),
 ]
 
@@ -116,29 +118,17 @@ async def _set_commands(bot: Bot) -> None:
             )
 
 
-def sweep_stale_tmp(temp_dir: Path, max_age_s: int = 3600) -> None:
-    if not temp_dir.exists():
-        return
-    now = time.time()
-    for entry in temp_dir.iterdir():
-        if entry.is_dir():
-            if _is_active_link(entry):
-                continue
-            try:
-                if now - entry.stat().st_mtime > max_age_s:
-                    shutil.rmtree(entry, ignore_errors=True)
-                    log.info("swept stale temp dir %s", entry.name)
-            except OSError:
-                continue
-
-
-def _is_active_link(entry: Path) -> bool:
-    """Never sweep a directory that a live download link points at."""
-    try:
-        link_root = settings.download_link_dir_resolved.resolve()
-        return link_root != Path("/") and entry.resolve().is_relative_to(link_root)
-    except (OSError, ValueError):
-        return False
+def sweep_stale_tmp(temp_dir: Path, max_age_s: float = 3600) -> int:
+    """Delete stale temp dirs; never touch live flows or the download-link dir."""
+    result = sweep_temp_dir(
+        temp_dir,
+        max_age_s=max_age_s,
+        protected=active_temp_dirs(),
+        keep_within=[settings.download_link_dir_resolved],
+    )
+    if result.removed:
+        log.info("swept %d stale temp entries (%d bytes)", result.removed, result.freed_bytes)
+    return result.removed
 
 
 def _link_dir_warning() -> str | None:
@@ -166,6 +156,7 @@ async def _maintenance_loop(srv) -> None:
             await srv.db.purge_cache_expired(settings.cache_ttl_s)
             await srv.db.spotify_meta_purge_expired(META_TTL_S)
             await srv.download_links.cleanup(srv.db)
+            sweep_stale_tmp(settings.temp_dir_resolved)
         except Exception:  # noqa: BLE001
             log.warning("maintenance sweep failed", exc_info=True)
 

@@ -17,12 +17,14 @@ from aiogram.types import Message
 
 from bot.config import settings
 from bot.deps import get_services
-from bot.handlers.common import text
+from bot.handlers.common import active_temp_dirs, text
 from bot.services.downloader import (
     curl_cffi_version,
     detect_js_runtime,
+    dir_size_bytes,
     disk_free_bytes,
     format_proxy_summary,
+    sweep_temp_dir,
 )
 from bot.services.updater import cli_version
 from bot.utils import format_size
@@ -204,6 +206,47 @@ async def cmd_update_ytdlp(message: Message) -> None:
     await message.answer(body)
 
 
+@router.message(Command("cleanup"))
+async def cmd_cleanup(message: Message, command: CommandObject) -> None:
+    if not _is_admin(message):
+        await _denied(message)
+        return
+    max_age = _parse_cleanup_age(command.args)
+    temp_dir = settings.temp_dir_resolved
+    before_free = _safe_disk_free(temp_dir)
+    before_size = dir_size_bytes(temp_dir)
+    ack = await message.answer(text("en", "cleanup_running"))
+    result = sweep_temp_dir(
+        temp_dir,
+        max_age_s=max_age,
+        protected=active_temp_dirs(),
+        keep_within=[settings.download_link_dir_resolved],
+    )
+    after_free = _safe_disk_free(temp_dir)
+    after_size = dir_size_bytes(temp_dir)
+    log.info(
+        "cleanup cmd admin_id=%s removed=%d freed=%d age>%s",
+        message.from_user.id,
+        result.removed,
+        result.freed_bytes,
+        max_age,
+    )
+    body = text(
+        "en",
+        "cleanup_done" if result.removed else "cleanup_empty",
+        removed=result.removed,
+        freed=format_size(result.freed_bytes),
+        temp_before=format_size(before_size),
+        temp_now=format_size(after_size),
+        free_before=format_size(before_free),
+        free_now=format_size(after_free),
+    )
+    try:
+        await ack.edit_text(body)
+    except Exception:  # noqa: BLE001
+        await message.answer(body)
+
+
 @router.message(Command("health"))
 async def cmd_health(message: Message) -> None:
     if not _is_admin(message):
@@ -297,6 +340,23 @@ def _parse_user_id(arg: str | None) -> int | None:
         return int(arg.strip().lstrip("@"))
     except ValueError:
         return None
+
+
+def _parse_cleanup_age(arg: str | None) -> int:
+    """Optional age filter for /cleanup; 0 (default) removes entries of any age."""
+    if not arg:
+        return 0
+    try:
+        return max(0, int(arg.strip()))
+    except ValueError:
+        return 0
+
+
+def _safe_disk_free(path) -> int:
+    try:
+        return disk_free_bytes(path)
+    except OSError:
+        return 0
 
 
 def _ffmpeg_version() -> str:

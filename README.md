@@ -37,7 +37,7 @@ Spotify itself; see [Spotify](#spotify-metadata-match).
 - 🔍 **Inline mode** (`@yourbot <url>`) with cached results and deep links.
 - 🌍 **Localisation**: English, German, Farsi (fallback chain per user).
 - 🛠️ **Admin tools**: `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`,
-  `/update_ytdlp`, `/health`.
+  `/update_ytdlp`, `/cleanup`, `/health`.
 - ♻️ **Self-updating yt-dlp** (daily) plus automatic update-and-retry when an
   extractor breaks.
 - 🐳 **Docker / Compose** and a **systemd** unit, plus an interactive
@@ -298,6 +298,7 @@ picture) via ffmpeg, best-effort.
 | `/broadcast <text>` | Send a message to every active user. |
 | `/ban <user_id>` / `/unban <user_id>` | Block / unblock a user. |
 | `/update_ytdlp` | Update yt-dlp immediately. |
+| `/cleanup [max_age_s]` | Delete unused temp dirs now (protects live flows and the download-link dir); reports freed bytes and free disk. `max_age_s` keeps entries newer than that. |
 | `/health` | Versions, disk, queue, proxy/cookies/JS-runtime/curl_cffi, a live egress probe, and the masked proxy exit IP. |
 
 ## How it works

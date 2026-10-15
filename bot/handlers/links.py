@@ -379,6 +379,7 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
     except Exception as exc:  # noqa: BLE001 — yt-dlp raises many error types
         await _on_download_error(flow, user_id, exc)
         _cleanup_pending(flow)
+        cleanup_dir(flow.tmpdir)
         return
 
     parts = _nonempty(paths)

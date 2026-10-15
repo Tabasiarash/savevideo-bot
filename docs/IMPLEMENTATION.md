@@ -70,7 +70,7 @@ replace an individual service with a fake.
 | Pure helpers | `bot/utils.py` | URL extraction/normalisation, host/site classification, SSRF checks, formatting. |
 | i18n | `bot/i18n.py` | en/de/fa string tables (key sets asserted equal), fallback chain. |
 | Handlers | `bot/handlers/start.py` | `/start`, `/help`, `/language`, deep-link entry. |
-| | `bot/handlers/admin.py` | `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`, `/update_ytdlp`, `/health`. |
+| | `bot/handlers/admin.py` | `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`, `/update_ytdlp`, `/cleanup`, `/health`. |
 | | `bot/handlers/links.py` | Core flow: detect → info → picker → download → upload/cache/link. |
 | | `bot/handlers/spotify.py` | Spotify link detection → metadata → source match → audio picker (feature-gated). |
 | | `bot/handlers/inline.py` | Inline mode: cached result or deep-link article. |
@@ -306,8 +306,12 @@ version is recorded in `schema_version`.
 - systemd hardening (`savevideo-bot.service`): `User=savevideo`, `ProtectSystem=full`,
   `PrivateTmp=true`, `RestrictAddressFamilies=AF_INET AF_INET6`,
   `ReadWritePaths=…/data …/tmp …/.venv /srv/savevideo-links`.
-- Background tasks: hourly maintenance (purge deeplinks/cache/links) and the yt-dlp
-  auto-update loop (notifies admins on failure).
+- Background tasks: hourly maintenance (purge deeplinks/cache/links + `sweep_stale_tmp`) and
+  the yt-dlp auto-update loop (notifies admins on failure). Temp dirs are also swept once at
+  startup. `sweep_temp_dir` (in `bot/services/downloader.py`) never removes dirs for live flows
+  (`active_temp_dirs`) or anything under `DOWNLOAD_LINK_DIR`.
+- Admin `/cleanup [max_age_s]` frees temp space on demand: builds the same protection set and
+  reports entries removed, bytes freed, temp size and free disk before/after.
 - Admin `/health` reports yt-dlp/ffmpeg versions, disk, queue, mode, upload limit, SQLite
   access, proxy summary (masked), cookies age, JS runtime, curl_cffi, IP family, Spotify
   status, extra args, a live egress probe and the masked proxy exit IP.

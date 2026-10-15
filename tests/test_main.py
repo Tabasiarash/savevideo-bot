@@ -39,7 +39,7 @@ async def test_set_commands_public_and_per_admin(monkeypatch):
     admin_cmds, admin_scope = calls[1]
     names = [c.command for c in admin_cmds]
     assert names[:3] == ["start", "help", "language"]
-    for cmd in ("stats", "users", "broadcast", "ban", "unban", "update_ytdlp", "health"):
+    for cmd in ("stats", "users", "broadcast", "ban", "unban", "update_ytdlp", "cleanup", "health"):
         assert cmd in names
     assert admin_scope.chat_id == 111
     assert calls[2][1].chat_id == 222

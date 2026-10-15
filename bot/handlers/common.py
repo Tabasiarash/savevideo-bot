@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 
 from aiogram.types import Message
 
@@ -45,3 +46,22 @@ async def safe_delete(message: Message) -> None:
 
 def text(lang_code: str, key: str, **kwargs) -> str:
     return get_text(lang_code, key, settings.default_language, **kwargs)
+
+
+def active_temp_dirs() -> set[Path]:
+    """Temp directories belonging to live flows, which must never be swept.
+
+    Imported lazily to avoid a circular import at module load time.
+    """
+    from bot.handlers import links, spotify
+
+    dirs: set[Path] = set()
+    for flow in getattr(links, "_pending", {}).values():
+        tmpdir = getattr(flow, "tmpdir", None)
+        if tmpdir is not None:
+            dirs.add(Path(tmpdir))
+    for state in getattr(spotify, "_matches", {}).values():
+        tmpdir = getattr(state, "tmpdir", None)
+        if tmpdir is not None:
+            dirs.add(Path(tmpdir))
+    return dirs
