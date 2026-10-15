@@ -82,15 +82,38 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
+PUBLIC_COMMANDS = [
+    types.BotCommand(command="start", description="Start / show help"),
+    types.BotCommand(command="help", description="How to use the bot"),
+    types.BotCommand(command="language", description="Change language"),
+]
+
+ADMIN_COMMANDS = [
+    types.BotCommand(command="stats", description="Usage statistics"),
+    types.BotCommand(command="users", description="Recent users"),
+    types.BotCommand(command="broadcast", description="Message every user"),
+    types.BotCommand(command="ban", description="Ban a user"),
+    types.BotCommand(command="unban", description="Unban a user"),
+    types.BotCommand(command="update_ytdlp", description="Update yt-dlp now"),
+    types.BotCommand(command="health", description="Health / environment report"),
+]
+
+
 async def _set_commands(bot: Bot) -> None:
+    """Populate the blue command menu.
+
+    Everyone sees the public commands; each admin also gets the admin commands
+    in their own private chat (a chat scope overrides the default list there).
+    """
     with contextlib.suppress(Exception):
-        await bot.set_my_commands(
-            [
-                types.BotCommand(command="start", description="Start / show help"),
-                types.BotCommand(command="help", description="How to use the bot"),
-                types.BotCommand(command="language", description="Change language"),
-            ]
-        )
+        await bot.set_my_commands(PUBLIC_COMMANDS)
+    admin_menu = PUBLIC_COMMANDS + ADMIN_COMMANDS
+    for admin_id in settings.admin_ids:
+        with contextlib.suppress(Exception):
+            await bot.set_my_commands(
+                admin_menu,
+                scope=types.BotCommandScopeChat(chat_id=admin_id),
+            )
 
 
 def sweep_stale_tmp(temp_dir: Path, max_age_s: int = 3600) -> None:
