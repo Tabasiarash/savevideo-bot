@@ -13,6 +13,7 @@ import contextlib
 import logging
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,19 @@ _PREFIXES = ("dl", "pl")
 _GALLERY_SITES = {"instagram", "facebook", "twitter", "x", "tumblr", "reddit", "pinterest"}
 _IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 
+# A post-download hook may rewrite/move the produced files in place (e.g. tag an
+# audio file) before it is uploaded or linked. It is only invoked when set.
+PostprocessHook = Callable[[list[Path]], Awaitable[None]]
+
+
+@dataclass
+class AudioMeta:
+    """Optional audio tags applied on upload (used by metadata-matched flows)."""
+
+    title: str | None = None
+    performer: str | None = None
+    cover: Path | None = None
+
 
 @dataclass
 class PendingFlow:
@@ -79,10 +93,15 @@ class PendingFlow:
     playlist_items: str | None
     lang: str
     status_message: Message | None
+    # Overrides for handlers that prepare a flow independently (metadata match):
+    # the cache key can differ from the download URL and audio can be tagged.
+    cache_key: str | None = None
+    audio_meta: AudioMeta | None = None
+    postprocess: PostprocessHook | None = None
 
     @property
     def url_hash(self) -> str:
-        return url_hash(self.url)
+        return self.cache_key or url_hash(self.url)
 
 
 _pending: dict[int, PendingFlow] = {}
@@ -296,20 +315,23 @@ def _min_free_ok() -> bool:
         return True
 
 
-async def _run_download(callback: CallbackQuery, bot: Bot, flow: PendingFlow, fmt: str) -> None:
+async def download_flow(bot: Bot, flow: PendingFlow, fmt: str, user_id: int) -> str:
+    """Queue a prepared flow, download and deliver it.
+
+    Shared entry point for every handler. Returns ``"ok"`` when the attempt ran,
+    ``"disk_low"`` (already shown to the user) or ``"active_job"`` (the caller
+    surfaces it, e.g. as a callback alert) when it was rejected before starting.
+    """
     srv = get_services()
-    user_id = callback.from_user.id
-    lang = flow.lang
 
     if not _min_free_ok():
-        await _edit(message=flow.status_message, body=text(lang, "disk_low"))
+        await _edit(message=flow.status_message, body=text(flow.lang, "disk_low"))
         _cleanup_pending(flow)
         cleanup_dir(flow.tmpdir)
-        return
+        return "disk_low"
 
     if not await srv.ratelimiter.start_job(user_id):
-        await callback.answer(text(lang, "active_job"), show_alert=True)
-        return
+        return "active_job"
 
     admission = await srv.queue.enter()
     try:
@@ -317,6 +339,13 @@ async def _run_download(callback: CallbackQuery, bot: Bot, flow: PendingFlow, fm
     finally:
         await srv.queue.leave()
         await srv.ratelimiter.finish_job(user_id)
+    return "ok"
+
+
+async def _run_download(callback: CallbackQuery, bot: Bot, flow: PendingFlow, fmt: str) -> None:
+    result = await download_flow(bot, flow, fmt, callback.from_user.id)
+    if result == "active_job":
+        await callback.answer(text(flow.lang, "active_job"), show_alert=True)
 
 
 async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int, position: int) -> None:
@@ -359,6 +388,8 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
             _cleanup_pending(flow)
             cleanup_dir(flow.tmpdir)
             return
+        if flow.postprocess is not None:
+            await flow.postprocess(parts)
         total = sum(p.stat().st_size for p in parts)
         consumed = await _deliver(srv, bot, flow, parts, fmt, user_id, lang, total)
     finally:
@@ -518,15 +549,17 @@ async def _upload_video_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path]
 
 async def _upload_audio_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str) -> None:
     chat_id = flow.status_message.chat.id if flow.status_message else user_id
+    meta = flow.audio_meta
     for path in parts:
         media = await probe_media(path)
-        sent = await bot.send_audio(
-            chat_id,
-            FSInputFile(path),
-            title=sanitize_filename(flow.title) or None,
-            performer=sanitize_filename(flow.uploader) or None,
-            duration=int(media.duration or flow.duration) or None,
-        )
+        kwargs: dict[str, Any] = {
+            "title": (meta.title if meta and meta.title else sanitize_filename(flow.title)) or None,
+            "performer": (meta.performer if meta and meta.performer else sanitize_filename(flow.uploader)) or None,
+            "duration": int(media.duration or flow.duration) or None,
+        }
+        if meta and meta.cover and meta.cover.exists():
+            kwargs["thumbnail"] = FSInputFile(meta.cover)
+        sent = await bot.send_audio(chat_id, FSInputFile(path), **kwargs)
         size = path.stat().st_size
         if len(parts) == 1:
             await srv.cache.put(flow.url_hash, fmt, sent.audio.file_id, flow.title, size)
@@ -695,6 +728,13 @@ def _find_thumbnail(tmpdir: Path) -> Path | None:
 def _new_tmpdir(user_id: int) -> Path:
     stamp = f"u{user_id}_{int(time.time() * 1000)}_{secrets.token_hex(3)}"
     return settings.temp_dir_resolved / stamp
+
+
+def make_tmpdir(user_id: int) -> Path:
+    """Create and return a fresh per-job temp directory (shared by handlers)."""
+    tmpdir = _new_tmpdir(user_id)
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    return tmpdir
 
 
 def _choose_text(flow: PendingFlow) -> str:
