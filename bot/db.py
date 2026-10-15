@@ -96,6 +96,19 @@ MIGRATIONS: dict[int, list[str]] = {
         "CREATE INDEX IF NOT EXISTS idx_download_links_user    ON download_links(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_download_links_expires ON download_links(expires_at)",
     ],
+    3: [
+        # Cached Spotify metadata (title/artist/cover) keyed by Spotify id.
+        # Only metadata is stored; Spotify audio itself is never downloaded.
+        """
+        CREATE TABLE IF NOT EXISTS spotify_meta (
+            spotify_id TEXT PRIMARY KEY,
+            type       TEXT,
+            json       TEXT NOT NULL,
+            fetched_at INTEGER NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_spotify_meta_fetched ON spotify_meta(fetched_at)",
+    ],
 }
 
 
@@ -401,6 +414,34 @@ class Database:
     async def download_link_purge_expired(self, now: int) -> int:
         assert self._conn is not None
         cur = await self._conn.execute("DELETE FROM download_links WHERE expires_at <= ?", (now,))
+        await self._conn.commit()
+        return int(cur.rowcount)
+
+    # -- spotify metadata cache ----------------------------------------------
+
+    async def spotify_meta_get(self, spotify_id: str, ttl_s: int) -> str | None:
+        assert self._conn is not None
+        cutoff = int(time.time()) - ttl_s
+        cur = await self._conn.execute(
+            "SELECT json FROM spotify_meta WHERE spotify_id = ? AND fetched_at > ?",
+            (spotify_id, cutoff),
+        )
+        row = await cur.fetchone()
+        return str(row["json"]) if row else None
+
+    async def spotify_meta_put(self, spotify_id: str, kind: str, payload_json: str) -> None:
+        await self._execute(
+            """
+            INSERT OR REPLACE INTO spotify_meta (spotify_id, type, json, fetched_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (spotify_id, kind, payload_json, int(time.time())),
+        )
+
+    async def spotify_meta_purge_expired(self, ttl_s: int) -> int:
+        assert self._conn is not None
+        cutoff = int(time.time()) - ttl_s
+        cur = await self._conn.execute("DELETE FROM spotify_meta WHERE fetched_at < ?", (cutoff,))
         await self._conn.commit()
         return int(cur.rowcount)
 

@@ -121,3 +121,28 @@ async def test_deeplink_purge(db):
 async def test_get_user_missing(db):
     assert await db.get_user(12345) is None
     assert await db.get_language(12345) is None
+
+
+async def test_spotify_meta_roundtrip_and_ttl(db):
+    assert await db.spotify_meta_get("abc", 3600) is None
+    await db.spotify_meta_put("abc", "track", '{"title": "X"}')
+    assert await db.spotify_meta_get("abc", 3600) == '{"title": "X"}'
+    # A negative TTL means the row is already stale.
+    assert await db.spotify_meta_get("abc", -10) is None
+    # Re-putting updates in place.
+    await db.spotify_meta_put("abc", "track", '{"title": "Y"}')
+    assert await db.spotify_meta_get("abc", 3600) == '{"title": "Y"}'
+
+
+async def test_spotify_meta_purge(db):
+    await db.spotify_meta_put("old", "track", "{}")
+    assert await db.spotify_meta_purge_expired(10**9) == 0
+    assert await db.spotify_meta_purge_expired(-1) == 1
+
+
+async def test_schema_version_includes_v3(db):
+    assert db._conn is not None
+    cur = await db._conn.execute("SELECT MAX(version) AS v FROM schema_version")
+    row = await cur.fetchone()
+    assert int(row["v"]) >= 3
+

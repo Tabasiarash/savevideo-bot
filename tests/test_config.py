@@ -156,3 +156,39 @@ def test_anti_blocking_overrides():
 def test_admin_ids_invalid_raises(bad):
     with pytest.raises(ValueError):
         _settings(admin_ids=bad)
+
+
+def test_spotify_defaults_are_off():
+    s = _settings()
+    assert s.enable_spotify is False
+    assert s.spotify_match_sources == "youtube,soundcloud"
+    assert s.spotify_sources() == ["youtube", "soundcloud"]
+    assert s.spotify_enable_collections is False
+    assert s.spotify_max_items == 25
+    assert s.spotify_duration_tolerance_s == 4
+    assert s.spotify_client_id == ""
+    assert s.spotify_client_secret == ""
+
+
+def test_spotify_sources_normalised():
+    s = _settings(spotify_match_sources=" YouTube , soundcloud ,, youtube ")
+    assert s.spotify_sources() == ["youtube", "soundcloud"]
+
+
+def test_proxy_for_spotify_falls_back():
+    assert _settings(proxy_url="socks5h://a:1").proxy_for_spotify() == "socks5h://a:1"
+    assert (
+        _settings(proxy_url="socks5h://a:1", proxy_url_spotify="socks5h://b:2").proxy_for_spotify()
+        == "socks5h://b:2"
+    )
+
+
+def test_spotify_env_aliases(monkeypatch):
+    monkeypatch.setenv("ENABLE_SPOTIFY", "true")
+    monkeypatch.setenv("SPOTIFY_MAX_ITEMS", "7")
+    monkeypatch.setenv("PROXY_URL_SPOTIFY", "socks5h://sp:1080")
+    s = Settings(_env_file=None, bot_token="x")
+    assert s.enable_spotify is True
+    assert s.spotify_max_items == 7
+    assert s.proxy_url_spotify == "socks5h://sp:1080"
+

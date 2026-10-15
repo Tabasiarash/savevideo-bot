@@ -110,6 +110,29 @@ class Settings(BaseSettings):
     # URL used by the admin /health command to probe the real download egress.
     egress_test_url: str = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 
+    # --- Spotify (metadata match; feature is OFF by default) -----------------
+    # When enabled, a Spotify link is turned into a metadata match: we read the
+    # public title/artist/cover, find the same recording on an allowed source
+    # (YouTube/SoundCloud) and download that copy. Spotify audio is never fetched.
+    enable_spotify: bool = False
+    # Comma-separated, priority-ordered search sources.
+    spotify_match_sources: str = "youtube,soundcloud"
+    # Minimum matcher score (0..1) for a candidate to be accepted.
+    spotify_min_score: float = 0.65
+    # Allowed duration drift between Spotify and a candidate, in seconds.
+    spotify_duration_tolerance_s: int = 4
+    # Albums/playlists/shows/artists are only expanded when this is true.
+    spotify_enable_collections: bool = False
+    # Hard cap on the number of items taken from a collection.
+    spotify_max_items: int = 25
+    # Optional Spotify Web API credentials (fill gaps such as ISRC).
+    spotify_client_id: str = ""
+    spotify_client_secret: str = ""
+    # Optional proxy just for Spotify metadata requests (falls back to PROXY_URL).
+    proxy_url_spotify: str = ""
+    # Parallel metadata fetches when expanding a collection.
+    spotify_meta_concurrency: int = 4
+
     # --- Storage ---
     db_path: str = "data/savevideo.db"
     temp_dir: str = "tmp"
@@ -222,6 +245,18 @@ class Settings(BaseSettings):
     @property
     def min_free_disk_bytes(self) -> int:
         return int(self.min_free_disk_gb * 1024**3)
+
+    def spotify_sources(self) -> list[str]:
+        """Normalised, de-duplicated Spotify match sources (lower-case)."""
+        seen: list[str] = []
+        for part in self.spotify_match_sources.split(","):
+            name = part.strip().lower()
+            if name and name not in seen:
+                seen.append(name)
+        return seen
+
+    def proxy_for_spotify(self) -> str:
+        return self.proxy_url_spotify.strip() or self.proxy_url.strip()
 
     @property
     def data_dir(self) -> Path:
