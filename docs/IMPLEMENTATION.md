@@ -70,7 +70,7 @@ replace an individual service with a fake.
 | Pure helpers | `bot/utils.py` | URL extraction/normalisation, host/site classification, SSRF checks, formatting. |
 | i18n | `bot/i18n.py` | en/de/fa string tables (key sets asserted equal), fallback chain. |
 | Handlers | `bot/handlers/start.py` | `/start`, `/help`, `/language`, deep-link entry. |
-| | `bot/handlers/admin.py` | `/stats`, `/broadcast`, `/ban`, `/unban`, `/update_ytdlp`, `/health`. |
+| | `bot/handlers/admin.py` | `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`, `/update_ytdlp`, `/health`. |
 | | `bot/handlers/links.py` | Core flow: detect → info → picker → download → upload/cache/link. |
 | | `bot/handlers/spotify.py` | Spotify link detection → metadata → source match → audio picker (feature-gated). |
 | | `bot/handlers/inline.py` | Inline mode: cached result or deep-link article. |

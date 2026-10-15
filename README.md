@@ -36,7 +36,7 @@ Spotify itself; see [Spotify](#spotify-metadata-match).
 - 📃 **Playlists** (`/playlist`) and **media groups** for carousel posts.
 - 🔍 **Inline mode** (`@yourbot <url>`) with cached results and deep links.
 - 🌍 **Localisation**: English, German, Farsi (fallback chain per user).
-- 🛠️ **Admin tools**: `/stats`, `/broadcast`, `/ban`, `/unban`,
+- 🛠️ **Admin tools**: `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`,
   `/update_ytdlp`, `/health`.
 - ♻️ **Self-updating yt-dlp** (daily) plus automatic update-and-retry when an
   extractor breaks.
@@ -293,7 +293,8 @@ picture) via ffmpeg, best-effort.
 
 | Command | Description |
 | --- | --- |
-| `/stats` | Users, downloads, top sites, failures, cache hit-rate, disk. |
+| `/stats` | Users (total/24h/7d + new today/week), downloads, top sites, failures, cache hit-rate, disk. |
+| `/users [limit]` | List the most recently seen users (id, @username, last seen, flags). |
 | `/broadcast <text>` | Send a message to every active user. |
 | `/ban <user_id>` / `/unban <user_id>` | Block / unblock a user. |
 | `/update_ytdlp` | Update yt-dlp immediately. |

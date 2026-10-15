@@ -453,6 +453,21 @@ class Database:
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
 
+    async def new_users_since(self, seconds: int) -> int:
+        assert self._conn is not None
+        cutoff = int(time.time()) - seconds
+        cur = await self._conn.execute("SELECT COUNT(*) AS c FROM users WHERE first_seen >= ?", (cutoff,))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def recent_users(self, limit: int = 20) -> list[aiosqlite.Row]:
+        assert self._conn is not None
+        cur = await self._conn.execute(
+            "SELECT * FROM users ORDER BY last_seen DESC, first_seen DESC, id DESC LIMIT ?",
+            (max(1, limit),),
+        )
+        return list(await cur.fetchall())
+
     async def active_users_since(self, seconds: int) -> int:
         assert self._conn is not None
         cutoff = int(time.time()) - seconds

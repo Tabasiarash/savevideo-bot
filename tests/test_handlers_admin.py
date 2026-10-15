@@ -26,6 +26,53 @@ async def test_stats_for_admin(services, make_message):
     assert msg.sent and "user" in msg.sent[0].lower()
 
 
+async def test_stats_reports_new_users(services, make_message):
+    import time
+
+    await services.db.upsert_user(1, "new", int(time.time()))
+    await services.db.upsert_user(2, "old", int(time.time()) - 30 * 24 * 3600)
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_stats(msg)
+    body = msg.sent[0]
+    assert "New users: 1 today" in body
+
+
+async def test_users_denied_for_non_admin(services, make_message):
+    msg = make_message(user_id=NON_ADMIN)
+    await admin.cmd_users(msg, _command(""))
+    assert "not an admin" in msg.sent[0].lower()
+
+
+async def test_users_lists_recent(services, make_message):
+    import time
+
+    now = int(time.time())
+    await services.db.upsert_user(1, "alice", now - 100)
+    await services.db.upsert_user(2, "bob", now)
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_users(msg, _command(""))
+    body = msg.sent[0]
+    assert "👥" in body and "2 total" in body
+    assert "bob" in body and "alice" in body
+    # Newest first.
+    assert body.index("bob") < body.index("alice")
+
+
+async def test_users_empty(services, make_message):
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_users(msg, _command(""))
+    assert "No users yet" in msg.sent[0]
+
+
+async def test_users_limit_clamped(services, make_message):
+    for uid in range(1, 5):
+        await services.db.upsert_user(uid, f"u{uid}", uid)
+    msg = make_message(user_id=ADMIN)
+    await admin.cmd_users(msg, _command("2"))
+    body = msg.sent[0]
+    assert "Showing 2" in body
+
+
 async def test_broadcast_requires_text(services, make_message):
     msg = make_message(user_id=ADMIN)
     await admin.cmd_broadcast(msg, _command(""))

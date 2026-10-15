@@ -85,6 +85,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stats": (
             "📊 <b>Stats</b>\n"
             "Users: {total} (24h: {active24}, 7d: {active7})\n"
+            "New users: {new24} today, {new7} this week\n"
             "Downloads: {today} today, {total_downloads} total\n"
             "Thumbnails: {thumbnails}\n"
             "Cache hit rate: {cache_hit}%\n"
@@ -93,6 +94,12 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Temp dir size: {tmp_size}"
         ),
         "stats_empty": "No data yet.",
+        "users_title": (
+            "👥 <b>Users</b> — {total} total "
+            "(24h: {active24}, 7d: {active7}, new today: {new24})\n"
+            "Showing {count} of most recent (limit {limit}):"
+        ),
+        "users_empty": "No users yet.",
         "broadcast_running": "Broadcasting…",
         "broadcast_done": "Broadcast finished: {ok} sent, {fail} failed, {blocked} blocked.",
         "broadcast_no_text": "Usage: /broadcast &lt;text&gt;",
@@ -226,6 +233,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stats": (
             "📊 <b>Statistiken</b>\n"
             "Nutzer: {total} (24h: {active24}, 7d: {active7})\n"
+            "Neue Nutzer: {new24} heute, {new7} diese Woche\n"
             "Downloads: {today} heute, {total_downloads} insgesamt\n"
             "Cover-Bilder: {thumbnails}\n"
             "Cache-Trefferquote: {cache_hit}%\n"
@@ -234,6 +242,12 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Größe des Temp-Ordners: {tmp_size}"
         ),
         "stats_empty": "Noch keine Daten.",
+        "users_title": (
+            "👥 <b>Nutzer</b> — {total} insgesamt "
+            "(24h: {active24}, 7d: {active7}, neu heute: {new24})\n"
+            "Zeige {count} der neuesten (Limit {limit}):"
+        ),
+        "users_empty": "Noch keine Nutzer.",
         "broadcast_running": "Sende Nachricht an alle…",
         "broadcast_done": "Übertragung abgeschlossen: {ok} gesendet, {fail} fehlgeschlagen, {blocked} blockiert.",
         "broadcast_no_text": "Verwendung: /broadcast &lt;text&gt;",
@@ -367,6 +381,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stats": (
             "📊 <b>آمار</b>\n"
             "کاربران: {total} (۲۴ ساعت: {active24}، ۷ روز: {active7})\n"
+            "کاربران جدید: {new24} امروز، {new7} این هفته\n"
             "دانلودها: {today} امروز، {total_downloads} کل\n"
             "جلدها: {thumbnails}\n"
             "نرخ کش: {cache_hit}٪\n"
@@ -375,6 +390,12 @@ _STRINGS: dict[str, dict[str, str]] = {
             "حجم پوشه موقت: {tmp_size}"
         ),
         "stats_empty": "هنوز داده‌ای وجود ندارد.",
+        "users_title": (
+            "👥 <b>کاربران</b> — {total} کل "
+            "(۲۴ ساعت: {active24}، ۷ روز: {active7}، جدید امروز: {new24})\n"
+            "نمایش {count} مورد از جدیدترین‌ها (حد {limit}):"
+        ),
+        "users_empty": "هنوز کاربری وجود ندارد.",
         "broadcast_running": "در حال ارسال همگانی…",
         "broadcast_done": "ارسال همگانی پایان یافت: {ok} ارسال، {fail} ناموفق، {blocked} مسدود.",
         "broadcast_no_text": "روش استفاده: /broadcast &lt;متن&gt;",

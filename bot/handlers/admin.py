@@ -1,4 +1,4 @@
-"""Admin commands: /stats, /broadcast, /ban, /unban, /update_ytdlp, /health.
+"""Admin commands: /stats, /users, /broadcast, /ban, /unban, /update_ytdlp, /health.
 
 Only users whose numeric IDs are in ``ADMIN_IDS`` may use these.
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 
 from aiogram import Bot, Router
@@ -50,6 +51,8 @@ async def cmd_stats(message: Message) -> None:
     total = await srv.db.total_users()
     active24 = await srv.db.active_users_since(24 * 3600)
     active7 = await srv.db.active_users_since(7 * 24 * 3600)
+    new24 = await srv.db.new_users_since(24 * 3600)
+    new7 = await srv.db.new_users_since(7 * 24 * 3600)
     today = await srv.db.downloads_today()
     total_dl = await srv.db.downloads_total()
     thumbs = await srv.db.thumbnails_total()
@@ -65,6 +68,8 @@ async def cmd_stats(message: Message) -> None:
             total=total,
             active24=active24,
             active7=active7,
+            new24=new24,
+            new7=new7,
             today=today,
             total_downloads=total_dl,
             thumbnails=thumbs,
@@ -74,6 +79,50 @@ async def cmd_stats(message: Message) -> None:
             tmp_size=format_size(disk),
         )
     )
+
+
+async def cmd_users(message: Message, command: CommandObject) -> None:
+    if not _is_admin(message):
+        await _denied(message)
+        return
+    srv = get_services()
+    limit = _parse_user_id(command.args) or 20
+    limit = max(1, min(limit, 100))
+    total = await srv.db.total_users()
+    active24 = await srv.db.active_users_since(24 * 3600)
+    active7 = await srv.db.active_users_since(7 * 24 * 3600)
+    new24 = await srv.db.new_users_since(24 * 3600)
+    rows = await srv.db.recent_users(limit)
+    header = text(
+        "en",
+        "users_title",
+        total=total,
+        active24=active24,
+        active7=active7,
+        new24=new24,
+        count=len(rows),
+        limit=limit,
+    )
+    if not rows:
+        await message.answer(f"{header}\n{text('en', 'users_empty')}")
+        return
+    lines = [header]
+    for row in rows:
+        lines.append(_format_user_row(row))
+    await message.answer("\n".join(lines))
+
+
+def _format_user_row(row) -> str:
+    username = f"@{row['username']}" if row["username"] else "—"
+    seen = row["last_seen"] or row["first_seen"] or 0
+    when = datetime.fromtimestamp(int(seen)).strftime("%Y-%m-%d %H:%M") if seen else "?"
+    flags = []
+    if row["banned"]:
+        flags.append("🚫")
+    if not row["active"]:
+        flags.append("💤")
+    suffix = (" " + "".join(flags)) if flags else ""
+    return f"<code>{row['id']}</code> {username} · {when}{suffix}"
 
 
 @router.message(Command("broadcast"))

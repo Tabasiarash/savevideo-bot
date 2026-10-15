@@ -73,6 +73,27 @@ async def test_active_users_and_touch(db):
     assert await db.active_users_since(3600) == 0
 
 
+async def test_new_users_since(db):
+    now = int(time.time())
+    await db.upsert_user(1, "recent", now)
+    await db.upsert_user(2, "old", now - 10 * 24 * 3600)
+    assert await db.new_users_since(24 * 3600) == 1
+    assert await db.new_users_since(30 * 24 * 3600) == 2
+    assert await db.new_users_since(-1) == 0
+
+
+async def test_recent_users_ordering_and_limit(db):
+    now = int(time.time())
+    await db.upsert_user(1, "oldest", now - 100)
+    await db.upsert_user(2, "newest", now)
+    await db.upsert_user(3, "middle", now - 50)
+    rows = await db.recent_users(2)
+    assert [int(r["id"]) for r in rows] == [2, 3]
+    await db.set_banned(2, True)
+    row = (await db.recent_users(1))[0]
+    assert row["username"] == "newest" and int(row["banned"]) == 1
+
+
 async def test_cache_roundtrip_and_expiry(db):
     await db.cache_put("h", "video_720", "FILEID", "Title", 1234)
     row = await db.cache_get("h", "video_720", 3600)
