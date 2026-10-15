@@ -31,8 +31,8 @@ class StubRunner:
         self._results = results
         self.calls: list[tuple[str, dict]] = []
 
-    async def extract_info(self, url, *, playlist=False, playlist_items=None, cookiejar_dir=None, proxy=None):
-        self.calls.append((url, {"playlist": playlist, "proxy": proxy}))
+    async def extract_info(self, url, *, playlist=False, playlist_items=None, cookiejar_dir=None, proxy=None, flat=False):
+        self.calls.append((url, {"playlist": playlist, "proxy": proxy, "flat": flat}))
         prefix = url.split(":", 1)[0]
         result = self._results.get(prefix)
         if isinstance(result, Exception):
@@ -93,6 +93,8 @@ async def test_find_match_picks_best_candidate():
     assert result.candidate.url == "https://youtu.be/good"
     assert result.candidate.score >= 0.65
     assert runner.calls[0][0].startswith("ytsearch5:")
+    assert runner.calls[0][1]["flat"] is True
+    assert runner.calls[0][1]["playlist"] is True
 
 
 async def test_find_match_falls_back_to_soundcloud():

@@ -207,6 +207,13 @@ def test_extra_args_defaults(monkeypatch):
     assert "--js-runtimes" not in args
 
 
+def test_extra_args_flat_playlist(monkeypatch):
+    _no_js(monkeypatch)
+    runner = YtDlpRunner(_settings())
+    assert "--flat-playlist" not in runner._extra_args(playlist=True, playlist_items=None)
+    assert "--flat-playlist" in runner._extra_args(playlist=True, playlist_items=None, flat=True)
+
+
 def test_extra_args_adds_js_runtime_prefers_deno(monkeypatch):
     monkeypatch.setattr(
         dl.shutil, "which", lambda name: "/usr/local/bin/deno" if name == "deno" else None

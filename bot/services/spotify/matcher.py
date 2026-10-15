@@ -167,7 +167,7 @@ async def search_source(
     if url is None:
         return []
     info = await runner.extract_info(
-        url, playlist=True, proxy=proxy, cookiejar_dir=cookiejar_dir
+        url, playlist=True, flat=True, proxy=proxy, cookiejar_dir=cookiejar_dir
     )
     entries = info.get("entries") if isinstance(info, dict) else None
     if not entries:

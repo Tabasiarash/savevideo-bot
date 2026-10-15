@@ -134,6 +134,7 @@ class YtDlpRunner:
         url: str | None = None,
         cookiejar_dir: Path | None = None,
         proxy: str | None = None,
+        flat: bool = False,
     ) -> list[str]:
         args = ["--no-warnings", "--no-colors", "--newline", "-q"]
         if playlist:
@@ -142,6 +143,11 @@ class YtDlpRunner:
                 args += ["--playlist-items", playlist_items]
         else:
             args += ["--no-playlist"]
+        # Search results (``ytsearch``/``scsearch``) only need lightweight
+        # entries: extracting each hit fully is slow and aborts on DRM-protected
+        # hits. Flat mode returns id/title/uploader/duration in one request.
+        if flat:
+            args += ["--flat-playlist"]
         args += self._cookie_args(cookiejar_dir)
         # An explicit proxy (e.g. the Spotify matcher picking a search source's
         # own egress) wins over the host-derived platform default.
@@ -212,6 +218,7 @@ class YtDlpRunner:
         playlist_items: str | None = None,
         cookiejar_dir: Path | None = None,
         proxy: str | None = None,
+        flat: bool = False,
     ) -> dict[str, Any]:
         """Extract metadata as a dict (``yt-dlp -J``). Raises :class:`InfoError`."""
         args = [
@@ -226,6 +233,7 @@ class YtDlpRunner:
                 url=url,
                 cookiejar_dir=cookiejar_dir,
                 proxy=proxy,
+                flat=flat,
             ),
             url,
         ]
