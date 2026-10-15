@@ -81,6 +81,7 @@ async def cmd_stats(message: Message) -> None:
     )
 
 
+@router.message(Command("users"))
 async def cmd_users(message: Message, command: CommandObject) -> None:
     if not _is_admin(message):
         await _denied(message)

@@ -183,3 +183,34 @@ async def test_admin_command_as_admin_responds(services, dispatcher, aiogram_bot
     sent = texts(aiogram_bot)
     assert get_text("en", "not_allowed") not in sent
     assert sent, "admin got no stats reply"
+
+
+async def test_users_command_as_admin_not_unknown(services, dispatcher, aiogram_bot):
+    # Regression: cmd_users once lacked its Command("users") decorator, so the
+    # command silently fell through to links.router's catch-all.
+    await feed(dispatcher, aiogram_bot, "/users", user_id=ADMIN_ID)
+    sent = texts(aiogram_bot)
+    assert sent, "admin got no /users reply"
+    assert get_text("en", "unknown_command") not in sent
+    assert get_text("en", "not_allowed") not in sent
+    assert any("Users" in body for body in sent)
+
+
+async def test_users_command_with_limit(services, dispatcher, aiogram_bot):
+    await feed(dispatcher, aiogram_bot, "/users 5", user_id=ADMIN_ID)
+    sent = texts(aiogram_bot)
+    assert sent
+    assert get_text("en", "unknown_command") not in sent
+
+
+async def test_users_command_as_non_admin_denied(services, dispatcher, aiogram_bot):
+    await feed(dispatcher, aiogram_bot, "/users", user_id=USER_ID)
+    assert get_text("en", "not_allowed") in texts(aiogram_bot)
+
+
+async def test_health_command_as_admin_responds(services, dispatcher, aiogram_bot):
+    await feed(dispatcher, aiogram_bot, "/health", user_id=ADMIN_ID)
+    sent = texts(aiogram_bot)
+    assert sent, "admin got no /health reply"
+    assert get_text("en", "unknown_command") not in sent
+    assert get_text("en", "not_allowed") not in sent
