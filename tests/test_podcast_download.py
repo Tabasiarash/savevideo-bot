@@ -10,17 +10,26 @@ from bot.services.podcast import download as dl
 # Minimal HTTP/1.1 server (Connection: close) used to exercise the fetcher.
 # --------------------------------------------------------------------------
 
+# Cookie headers seen across requests, so a test can prove none are ever sent.
+SEEN_COOKIES: list[str] = []
 
-async def _read_path(reader: asyncio.StreamReader) -> str:
+
+async def _read_request(reader: asyncio.StreamReader) -> tuple[str, dict[str, str]]:
     line = await reader.readline()
+    headers: dict[str, str] = {}
     while True:
-        header = await reader.readline()
-        if header in (b"\r\n", b"\n", b""):
+        raw = await reader.readline()
+        if raw in (b"\r\n", b"\n", b""):
             break
+        name, _, value = raw.decode("latin-1").partition(":")
+        headers[name.strip().lower()] = value.strip()
+    cookie = headers.get("cookie")
+    if cookie:
+        SEEN_COOKIES.append(cookie)
     try:
-        return line.decode("latin-1").split(" ")[1]
+        return line.decode("latin-1").split(" ")[1], headers
     except IndexError:  # pragma: no cover - malformed request
-        return "/"
+        return "/", headers
 
 
 def _write(writer: asyncio.StreamWriter, status: int, headers: dict[str, str], body: bytes = b"") -> None:
@@ -32,10 +41,16 @@ def _write(writer: asyncio.StreamWriter, status: int, headers: dict[str, str], b
 
 
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    path = await _read_path(reader)
+    path, _headers = await _read_request(reader)
     try:
-        if path == "/ok.mp3":
+        if path == "/ok.mp3" or path == "/cookie.mp3":
             _write(writer, 200, {"Content-Type": "audio/mpeg"}, b"AUDIO")
+        elif path.startswith("/chain/"):
+            hops = int(path.rsplit("/", 1)[1])
+            if hops <= 0:
+                _write(writer, 200, {"Content-Type": "audio/mpeg"}, b"AUDIO")
+            else:
+                _write(writer, 302, {"Location": f"/chain/{hops - 1}"})
         elif path == "/html":
             _write(writer, 200, {"Content-Type": "text/html; charset=utf-8"}, b"<html>nope</html>")
         elif path == "/declare-big":
@@ -46,6 +61,27 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         elif path == "/stream-big":
             # No Content-Length: the fetcher must enforce the cap while streaming.
             _write(writer, 200, {"Content-Type": "audio/mpeg"}, b"x" * 5000)
+        elif path == "/chunked-over":
+            # Chunked transfer with total bytes exceeding cap (5000 bytes)
+            _write(writer, 200, {"Content-Type": "audio/mpeg", "Transfer-Encoding": "chunked"})
+            chunk = b"x" * 4000
+            writer.write(f"{len(chunk):x}\r\n".encode("latin-1") + chunk + b"\r\n")
+            writer.write(f"{len(chunk):x}\r\n".encode("latin-1") + chunk + b"\r\n")  # total 8000 > 5000 cap
+            writer.write(b"0\r\n\r\n")
+        elif path == "/chunked-ok":
+            # Chunked transfer within cap
+            _write(writer, 200, {"Content-Type": "audio/mpeg", "Transfer-Encoding": "chunked"})
+            chunk = b"AUDIO"
+            writer.write(f"{len(chunk):x}\r\n".encode("latin-1") + chunk + b"\r\n")
+            writer.write(b"0\r\n\r\n")
+        elif path == "/understate":
+            # Content-Length lies low while the real (chunked) body is large;
+            # the declared-size shortcut must not be trusted, the stream cap must.
+            _write(writer, 200, {"Content-Type": "audio/mpeg", "Content-Length": "10", "Transfer-Encoding": "chunked"})
+            chunk = b"Y" * 4000
+            for _ in range(5):  # 20000 bytes total
+                writer.write(f"{len(chunk):x}\r\n".encode("latin-1") + chunk + b"\r\n")
+            writer.write(b"0\r\n\r\n")
         elif path == "/empty":
             _write(writer, 200, {"Content-Type": "audio/mpeg", "Content-Length": "0"})
         elif path == "/redir":
@@ -134,6 +170,26 @@ async def test_enforces_cap_while_streaming(tmp_path, allow_local):
     assert list(tmp_path.iterdir()) == []
 
 
+async def test_enforces_cap_for_chunked_response(tmp_path, allow_local):
+    async with _server() as port:
+        with pytest.raises(dl.EnclosureTooLarge):
+            await dl.stream_enclosure(f"http://127.0.0.1:{port}/chunked-over", tmp_path, max_bytes=5000)
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_downloads_chunked_response(tmp_path, allow_local):
+    async with _server() as port:
+        path = await dl.stream_enclosure(f"http://127.0.0.1:{port}/chunked-ok", tmp_path, max_bytes=10000)
+    assert path.read_bytes() == b"AUDIO"
+
+
+async def test_enforces_cap_when_content_length_understated(tmp_path, allow_local):
+    async with _server() as port:
+        with pytest.raises(dl.EnclosureTooLarge):
+            await dl.stream_enclosure(f"http://127.0.0.1:{port}/understate", tmp_path, max_bytes=5000)
+    assert list(tmp_path.iterdir()) == []
+
+
 async def test_rejects_empty_body(tmp_path, allow_local):
     async with _server() as port:
         with pytest.raises(dl.EnclosureError):
@@ -157,3 +213,62 @@ async def test_rejects_redirect_loop(tmp_path, allow_local):
     async with _server() as port:
         with pytest.raises(dl.EnclosureError):
             await dl.stream_enclosure(f"http://127.0.0.1:{port}/loop", tmp_path, max_bytes=1000)
+
+
+async def test_follows_redirect_chain_at_limit(tmp_path, allow_local):
+    # Exactly five redirect hops then a body is still followed successfully.
+    async with _server() as port:
+        path = await dl.stream_enclosure(f"http://127.0.0.1:{port}/chain/5", tmp_path, max_bytes=1000)
+    assert path.read_bytes() == b"AUDIO"
+
+
+async def test_rejects_redirect_chain_over_limit(tmp_path, allow_local):
+    # Six redirect hops exceeds the cap and must abort rather than keep going.
+    async with _server() as port:
+        with pytest.raises(dl.EnclosureError):
+            await dl.stream_enclosure(f"http://127.0.0.1:{port}/chain/6", tmp_path, max_bytes=1000)
+
+
+async def test_sends_no_cookies(tmp_path, allow_local):
+    SEEN_COOKIES.clear()
+    async with _server() as port:
+        await dl.stream_enclosure(f"http://127.0.0.1:{port}/cookie.mp3", tmp_path, max_bytes=1000)
+    assert SEEN_COOKIES == []
+
+
+async def test_pins_connection_to_validated_address(tmp_path, allow_local, monkeypatch):
+    # The connect must be pinned to the address we validated (via curl RESOLVE),
+    # so a second DNS answer cannot move it (rebinding).
+    seen: list[dict | None] = []
+    real_session = dl.cffi.Session
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("curl_options"))
+        return real_session(*args, **kwargs)
+
+    monkeypatch.setattr(dl.cffi, "Session", spy)
+    async with _server() as port:
+        await dl.stream_enclosure(f"http://127.0.0.1:{port}/ok.mp3", tmp_path, max_bytes=1000)
+
+    assert seen and seen[0] is not None
+    assert seen[0][dl.CurlOpt.RESOLVE] == [f"127.0.0.1:{port}:127.0.0.1"]
+
+
+def test_resolve_public_filters_private_answers(monkeypatch):
+    monkeypatch.setattr(
+        dl.socket,
+        "getaddrinfo",
+        lambda *a, **k: [
+            (2, 1, 6, "", ("93.184.216.34", 0)),
+            (2, 1, 6, "", ("10.0.0.5", 0)),
+        ],
+    )
+    assert dl._resolve_public("mixed.example") == ["93.184.216.34"]
+
+
+def test_resolve_public_rejects_all_private(monkeypatch):
+    monkeypatch.setattr(
+        dl.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))]
+    )
+    with pytest.raises(dl.EnclosureBlocked):
+        dl._resolve_public("internal.example")
