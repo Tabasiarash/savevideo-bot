@@ -136,6 +136,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "curl_cffi: {curl_cffi}\n"
             "IP family: {ip_family}\n"
             "Spotify: {spotify}\n"
+            "Podcasts: {podcasts}\n"
             "Extra args: {extra_args}\n"
             "Egress: {egress}\n"
             "Proxy exit: {proxy_exit}"
@@ -173,6 +174,27 @@ _STRINGS: dict[str, dict[str, str]] = {
         "spotify_collection_found": "🎵 This collection has {count} items; processing up to {max}.",
         "spotify_collection_done": "✅ Done: {ok} track(s) sent, {fail} failed.",
         "spotify_match_source": "🔗 Matched on {source}.",
+        "podcast_disabled": (
+            "🎙️ Podcast episodes can be fetched from the publisher's own feed, but this "
+            "feature is currently disabled. Spotify audio itself is DRM-protected and never downloaded."
+        ),
+        "podcast_show_link": "🎙️ That's a show link. Send a link to a single episode.",
+        "podcast_reading": "🎙️ Reading episode metadata…",
+        "podcast_searching": "🔎 Locating the publisher's audio for this episode…",
+        "podcast_downloading": "⬇️ Downloading the episode from the publisher…",
+        "podcast_no_metadata": "❌ Could not read metadata for this episode.",
+        "podcast_no_match": (
+            "❌ I couldn't find this episode's audio outside Spotify. It may be a "
+            "Spotify-exclusive. Spotify audio itself is never downloaded."
+        ),
+        "podcast_too_long": "❌ This episode is longer than {max} minutes, which is the limit.",
+        "podcast_too_large": "❌ The episode file is larger than {max} MB.",
+        "podcast_download_failed": "❌ Downloading the episode from the publisher failed.",
+        "podcast_fallback_pick": (
+            "🎙️ <b>{title}</b>\n👤 {show}\n\n"
+            "⚠️ No publisher copy was found, so this is a matched copy from {source} — it may "
+            "differ from the episode. Pick an audio format:"
+        ),
         "expired_selection": "This selection expired. Send the link again.",
         "sending_from_cache": "⚡ Resending from cache…",
         "inline_article_title": "Open in bot to download",
@@ -296,6 +318,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "curl_cffi: {curl_cffi}\n"
             "IP family: {ip_family}\n"
             "Spotify: {spotify}\n"
+            "Podcasts: {podcasts}\n"
             "Extra args: {extra_args}\n"
             "Egress: {egress}\n"
             "Proxy exit: {proxy_exit}"
@@ -334,6 +357,28 @@ _STRINGS: dict[str, dict[str, str]] = {
         "spotify_collection_found": "🎵 Diese Sammlung hat {count} Elemente; es werden bis zu {max} verarbeitet.",
         "spotify_collection_done": "✅ Fertig: {ok} Titel gesendet, {fail} fehlgeschlagen.",
         "spotify_match_source": "🔗 Zugeordnet auf {source}.",
+        "podcast_disabled": (
+            "🎙️ Podcast-Folgen können aus dem Feed des Herausgebers geladen werden, aber "
+            "diese Funktion ist derzeit deaktiviert. Spotify-Audio selbst ist DRM-geschützt "
+            "und wird nie heruntergeladen."
+        ),
+        "podcast_show_link": "🎙️ Das ist ein Show-Link. Sende einen Link zu einer einzelnen Folge.",
+        "podcast_reading": "🎙️ Folgen-Metadaten werden gelesen…",
+        "podcast_searching": "🔎 Die Audioquelle des Herausgebers für diese Folge wird gesucht…",
+        "podcast_downloading": "⬇️ Die Folge wird vom Herausgeber heruntergeladen…",
+        "podcast_no_metadata": "❌ Metadaten für diese Folge konnten nicht gelesen werden.",
+        "podcast_no_match": (
+            "❌ Die Audioquelle dieser Folge wurde außerhalb von Spotify nicht gefunden. "
+            "Möglicherweise ist sie Spotify-exklusiv. Spotify-Audio wird nie heruntergeladen."
+        ),
+        "podcast_too_long": "❌ Diese Folge ist länger als {max} Minuten (Limit).",
+        "podcast_too_large": "❌ Die Datei der Folge ist größer als {max} MB.",
+        "podcast_download_failed": "❌ Das Herunterladen der Folge vom Herausgeber ist fehlgeschlagen.",
+        "podcast_fallback_pick": (
+            "🎙️ <b>{title}</b>\n👤 {show}\n\n"
+            "⚠️ Es wurde keine Herausgeber-Version gefunden; dies ist ein zugeordneter Treffer "
+            "von {source} — er kann von der Folge abweichen. Wähle ein Audioformat:"
+        ),
         "expired_selection": "Diese Auswahl ist abgelaufen. Sende den Link erneut.",
         "sending_from_cache": "⚡ Erneut aus dem Cache gesendet…",
         "inline_article_title": "Im Bot öffnen und herunterladen",
@@ -456,6 +501,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "curl_cffi: {curl_cffi}\n"
             "IP family: {ip_family}\n"
             "Spotify: {spotify}\n"
+            "Podcasts: {podcasts}\n"
             "Extra args: {extra_args}\n"
             "Egress: {egress}\n"
             "Proxy exit: {proxy_exit}"
@@ -493,6 +539,27 @@ _STRINGS: dict[str, dict[str, str]] = {
         "spotify_collection_found": "🎵 این مجموعه {count} مورد دارد؛ تا {max} مورد پردازش می‌شود.",
         "spotify_collection_done": "✅ انجام شد: {ok} آهنگ ارسال شد، {fail} ناموفق.",
         "spotify_match_source": "🔗 در {source} تطبیق داده شد.",
+        "podcast_disabled": (
+            "🎙️ قسمت‌های پادکست را می‌توان از فید خود ناشر دریافت کرد، اما این ویژگی "
+            "در حال حاضر غیرفعال است. صدای خود اسپاتیفای محافظت‌شده (DRM) است و هرگز دانلود نمی‌شود."
+        ),
+        "podcast_show_link": "🎙️ این لینک یک برنامه است. لینک یک قسمت تکی را بفرستید.",
+        "podcast_reading": "🎙️ در حال خواندن اطلاعات قسمت…",
+        "podcast_searching": "🔎 در حال یافتن صدای ناشر برای این قسمت…",
+        "podcast_downloading": "⬇️ در حال دانلود قسمت از ناشر…",
+        "podcast_no_metadata": "❌ اطلاعات این قسمت خوانده نشد.",
+        "podcast_no_match": (
+            "❌ صدای این قسمت در خارج از اسپاتیفای پیدا نشد. ممکن است اختصاصی اسپاتیفای باشد. "
+            "صدای اسپاتیفای هرگز دانلود نمی‌شود."
+        ),
+        "podcast_too_long": "❌ این قسمت طولانی‌تر از {max} دقیقه است (حد مجاز).",
+        "podcast_too_large": "❌ حجم فایل این قسمت بیشتر از {max} مگابایت است.",
+        "podcast_download_failed": "❌ دانلود قسمت از ناشر ناموفق بود.",
+        "podcast_fallback_pick": (
+            "🎙️ <b>{title}</b>\n👤 {show}\n\n"
+            "⚠️ نسخهٔ ناشر پیدا نشد؛ این یک نسخهٔ منطبق از {source} است و ممکن است با قسمت متفاوت باشد. "
+            "یک فرمت صوتی انتخاب کنید:"
+        ),
         "expired_selection": "این انتخاب منقضی شده است. دوباره لینک را بفرستید.",
         "sending_from_cache": "⚡ ارسال مجدد از کش…",
         "inline_article_title": "برای دانلود در ربات باز کنید",

@@ -34,7 +34,7 @@ from bot.db import url_hash
 from bot.deps import get_services
 from bot.handlers import links
 from bot.handlers.common import is_banned, register_user, text
-from bot.services import tagger
+from bot.services import podcast, tagger
 from bot.services.breaker import Breaker
 from bot.services.downloader import cleanup_dir
 from bot.services.spotify import matcher, metadata, urls
@@ -110,6 +110,24 @@ async def on_spotify_message(message: Message, bot: Bot) -> None:
     raw = first_spotify_url(message.text)
     if raw is None:
         return
+
+    # Podcasts are an independent feature: an episode link is handled even when
+    # ENABLE_SPOTIFY is off. Route on the link kind as early as possible.
+    probe = urls.parse_spotify_url(raw)
+    if probe is not None and probe.kind == "episode":
+        await _podcast_entry(message, bot, probe, lang)
+        return
+    if probe is not None and probe.kind == "show" and settings.enable_podcasts:
+        await message.answer(text(lang, "podcast_show_link"))
+        return
+    if probe is None and urls.is_short_link(raw) and settings.enable_podcasts:
+        resolved = await _resolve(raw)
+        if resolved is not None and resolved.kind == "episode":
+            await _podcast_entry(message, bot, resolved, lang)
+            return
+        if resolved is not None and resolved.kind == "show":
+            await message.answer(text(lang, "podcast_show_link"))
+            return
 
     # Always answer Spotify links, even with the feature off.
     if not settings.enable_spotify:
@@ -200,6 +218,231 @@ async def _handle_track(message: Message, ref, lang: str, status: Message) -> No
     )
     _matches[user.id] = state
     await _present(state, candidate)
+
+
+# --------------------------------------------------------------------------
+# Podcast episodes (publisher feed, never Spotify audio)
+# --------------------------------------------------------------------------
+
+async def _podcast_entry(message: Message, bot: Bot, ref, lang: str) -> None:
+    """Enter the podcast lane for an episode link (gated by ENABLE_PODCASTS)."""
+    srv = get_services()
+    user = message.from_user
+    if user is None:
+        return
+
+    if not settings.enable_podcasts:
+        await message.answer(text(lang, "podcast_disabled"))
+        return
+
+    if await srv.ratelimiter.has_active_job(user.id):
+        await message.answer(text(lang, "active_job"))
+        return
+
+    status = await message.answer(text(lang, "podcast_reading"))
+    await _handle_episode(message, bot, ref, lang, status)
+
+
+async def _handle_episode(message: Message, bot: Bot, ref, lang: str, status: Message) -> None:
+    srv = get_services()
+    user = message.from_user
+    assert user is not None
+
+    # Note: the episode title and show name are sent to Apple's iTunes Search API.
+    meta = await podcast.fetch_episode_meta(srv.db, ref, proxy=settings.proxy_for_podcast())
+    if meta is None or not meta.is_usable():
+        await links.edit_message(message=status, body=text(lang, "podcast_no_metadata"))
+        return
+
+    if meta.duration_s and meta.duration_s > settings.podcast_max_duration_min * 60:
+        await links.edit_message(
+            message=status, body=text(lang, "podcast_too_long", max=settings.podcast_max_duration_min)
+        )
+        return
+
+    await links.edit_message(message=status, body=text(lang, "podcast_searching"))
+
+    tmpdir = links.make_tmpdir(user.id)
+    resolved = await podcast.resolve_episode_audio(
+        srv.db,
+        srv.runner,
+        settings,
+        meta,
+        ref,
+        proxy=settings.proxy_for_podcast(),
+        breaker=_breaker,
+        cookiejar_dir=tmpdir,
+    )
+    if resolved is None:
+        log.info("podcast no audio id=%s", ref.id)
+        await links.edit_message(message=status, body=text(lang, "podcast_no_match"))
+        cleanup_dir(tmpdir)
+        return
+
+    if resolved.is_fallback:
+        await _present_episode_fallback(message, ref, meta, resolved, tmpdir, lang, status)
+        return
+
+    await _deliver_episode_enclosure(message, bot, ref, meta, resolved, tmpdir, lang, status)
+
+
+def _episode_audio_meta(meta, resolved, cover_path: Path) -> links.AudioMeta:
+    return links.AudioMeta(
+        title=resolved.title or meta.title,
+        performer=resolved.show or meta.show,
+        cover=cover_path,
+    )
+
+
+def _make_episode_postprocess(meta, resolved, cover_path: Path):
+    async def _postprocess(parts: list[Path]) -> None:
+        cover = await _download_artwork(resolved.artwork_url or meta.cover_url, cover_path)
+        for path in parts:
+            if path.suffix.lower() not in _AUDIO_SUFFIXES:
+                continue
+            ok = await tagger.tag_audio(
+                path,
+                title=resolved.title or meta.title,
+                artist=resolved.show or meta.show,
+                album=resolved.show or meta.show,
+                date=meta.released,
+                cover=cover,
+            )
+            if not ok:
+                log.info("episode tagging skipped/failed for %s", path.name)
+
+    return _postprocess
+
+
+def _cover_allowed(url: str) -> bool:
+    from urllib.parse import urlparse
+
+    if urls.is_spotify_cdn(url):
+        return True
+    host = (urlparse(url).hostname or "").lower()
+    return host.endswith("mzstatic.com") or host.endswith(".scdn.co")
+
+
+async def _download_artwork(url: str | None, dest: Path) -> Path | None:
+    if not url:
+        return None
+    from bot.services.spotify import http as spotify_http
+
+    try:
+        resp = await spotify_http.fetch(
+            url,
+            proxy=settings.proxy_for_podcast(),
+            allow_redirects=True,
+            is_allowed=_cover_allowed,
+            max_bytes=5_000_000,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if resp.status == 200 and resp.content:
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(resp.content)
+            return dest
+        except OSError:
+            return None
+    return None
+
+
+async def _present_episode_fallback(
+    message: Message, ref, meta, resolved, tmpdir: Path, lang: str, status: Message
+) -> None:
+    """Offer a matched (non-publisher) copy, clearly labelled as such."""
+    user = message.from_user
+    assert user is not None
+
+    cover_path = tmpdir / "cover.jpg"
+    info = {
+        "id": ref.id,
+        "title": resolved.title or meta.title,
+        "uploader": resolved.show or meta.show or resolved.source,
+        "duration": resolved.duration_s or meta.duration_s or 0.0,
+    }
+    flow = links.PendingFlow(
+        url=resolved.audio_url,
+        url_site=resolved.source,
+        info=info,
+        tmpdir=tmpdir,
+        title=resolved.title or meta.title or "episode",
+        duration=float(resolved.duration_s or meta.duration_s or 0.0),
+        uploader=resolved.show or meta.show or "",
+        prefix="dl",
+        playlist_items=None,
+        lang=lang,
+        status_message=status,
+        cache_key=url_hash(f"podcast:{ref.id}"),
+        audio_meta=_episode_audio_meta(meta, resolved, cover_path),
+        postprocess=_make_episode_postprocess(meta, resolved, cover_path),
+    )
+    links.remember_flow(user.id, flow)
+    body = text(
+        lang,
+        "podcast_fallback_pick",
+        title=resolved.title or meta.title or "?",
+        show=resolved.show or meta.show or "?",
+        source=resolved.source,
+    )
+    await links.edit_message(message=status, body=body, reply_markup=links.picker_keyboard(flow))
+
+
+async def _deliver_episode_enclosure(
+    message: Message, bot: Bot, ref, meta, resolved, tmpdir: Path, lang: str, status: Message
+) -> None:
+    """Download the publisher's enclosure and deliver it (never transcoded)."""
+    user = message.from_user
+    assert user is not None
+
+    await links.edit_message(message=status, body=text(lang, "podcast_downloading"))
+    try:
+        path = await podcast.stream_enclosure(
+            resolved.audio_url,
+            tmpdir,
+            max_bytes=settings.podcast_max_enclosure_bytes,
+            proxy=settings.proxy_for_podcast(),
+            filename_hint=resolved.title or meta.title or "episode",
+        )
+    except podcast.EnclosureTooLarge:
+        await links.edit_message(
+            message=status, body=text(lang, "podcast_too_large", max=settings.podcast_max_enclosure_mb)
+        )
+        cleanup_dir(tmpdir)
+        return
+    except podcast.EnclosureError:
+        log.info("podcast enclosure failed id=%s", ref.id, exc_info=True)
+        await links.edit_message(message=status, body=text(lang, "podcast_download_failed"))
+        cleanup_dir(tmpdir)
+        return
+
+    cover_path = tmpdir / "cover.jpg"
+    info = {
+        "id": ref.id,
+        "title": resolved.title or meta.title,
+        "uploader": resolved.show or meta.show,
+        "duration": resolved.duration_s or meta.duration_s or 0.0,
+    }
+    flow = links.PendingFlow(
+        url=resolved.audio_url,
+        url_site="podcast",
+        info=info,
+        tmpdir=tmpdir,
+        title=resolved.title or meta.title or "episode",
+        duration=float(resolved.duration_s or meta.duration_s or 0.0),
+        uploader=resolved.show or meta.show or "",
+        prefix="dl",
+        playlist_items=None,
+        lang=lang,
+        status_message=status,
+        cache_key=url_hash(f"podcast:{ref.id}"),
+        audio_meta=_episode_audio_meta(meta, resolved, cover_path),
+        postprocess=_make_episode_postprocess(meta, resolved, cover_path),
+    )
+    outcome = await links.deliver_local_file(bot, flow, path, user.id)
+    if outcome == "active_job":
+        await links.edit_message(message=status, body=text(lang, "active_job"))
 
 
 @router.callback_query(F.data.startswith(_REMATCH_PREFIX))

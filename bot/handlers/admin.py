@@ -280,6 +280,7 @@ async def cmd_health(message: Message) -> None:
             curl_cffi=curl_cffi_version() or "not installed",
             ip_family=_ip_family_label(),
             spotify=_spotify_status(),
+            podcasts=_podcast_status(),
             extra_args=settings.ytdlp_extra_args or "none",
             egress=egress,
             proxy_exit=proxy_exit,
@@ -323,6 +324,13 @@ def _spotify_status() -> str:
     sources = ",".join(settings.spotify_sources()) or "none"
     api = "api" if settings.spotify_client_id else "no-api"
     return f"on [{sources}] {api}"
+
+
+def _podcast_status() -> str:
+    if not settings.enable_podcasts:
+        return "off"
+    sources = ",".join(s.strip() for s in settings.podcast_match_sources.split(",") if s.strip()) or "none"
+    return f"on [{sources}] regions={'/'.join(settings.podcast_regions_list())}"
 
 
 def _ip_family_label() -> str:

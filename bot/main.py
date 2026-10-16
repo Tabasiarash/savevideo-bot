@@ -18,6 +18,8 @@ from bot.deps import init_services
 from bot.handlers import admin, inline, links, spotify, start
 from bot.handlers.common import active_temp_dirs
 from bot.services.downloader import sweep_temp_dir
+from bot.services.podcast.meta import META_TTL_S as PODCAST_META_TTL_S
+from bot.services.podcast.resolver import RESOLVED_TTL_S as PODCAST_AUDIO_TTL_S
 from bot.services.spotify.metadata import META_TTL_S
 from bot.services.updater import auto_update_loop
 
@@ -155,6 +157,8 @@ async def _maintenance_loop(srv) -> None:
             await srv.db.purge_deeplinks(24 * 3600)
             await srv.db.purge_cache_expired(settings.cache_ttl_s)
             await srv.db.spotify_meta_purge_expired(META_TTL_S)
+            await srv.db.podcast_meta_purge_expired(PODCAST_META_TTL_S)
+            await srv.db.podcast_audio_purge_expired(PODCAST_AUDIO_TTL_S)
             await srv.download_links.cleanup(srv.db)
             sweep_stale_tmp(settings.temp_dir_resolved)
         except Exception:  # noqa: BLE001
@@ -203,6 +207,8 @@ async def main() -> None:
     await srv.db.connect()
     await srv.db.purge_cache_expired(settings.cache_ttl_s)
     await srv.db.spotify_meta_purge_expired(META_TTL_S)
+    await srv.db.podcast_meta_purge_expired(PODCAST_META_TTL_S)
+    await srv.db.podcast_audio_purge_expired(PODCAST_AUDIO_TTL_S)
     sweep_stale_tmp(settings.temp_dir_resolved)
     with contextlib.suppress(Exception):
         await srv.download_links.cleanup(srv.db)  # reconcile link files/rows at startup
