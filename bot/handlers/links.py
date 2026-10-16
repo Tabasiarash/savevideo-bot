@@ -441,6 +441,64 @@ async def _deliver(
         return True
 
 
+async def deliver_local_file(bot: Bot, flow: PendingFlow, path: Path, user_id: int) -> str:
+    """Deliver an already-downloaded local file (podcast enclosure path).
+
+    The file was fetched by the caller's own hardened HTTP client; yt-dlp is
+    deliberately not involved. Any tags are applied via ``flow.postprocess`` and
+    the shared upload/link logic is reused. Returns ``"ok"``/``"disk_low"``/
+    ``"active_job"`` like :func:`download_flow`.
+    """
+    srv = get_services()
+    lang = flow.lang
+
+    if not _min_free_ok():
+        await _edit(message=flow.status_message, body=text(lang, "disk_low"))
+        _cleanup_pending(flow)
+        cleanup_dir(flow.tmpdir)
+        return "disk_low"
+
+    if not await srv.ratelimiter.start_job(user_id):
+        return "active_job"
+
+    admission = await srv.queue.enter()
+    try:
+        if admission.position > 1:
+            await _edit(message=flow.status_message, body=text(lang, "downloading_position", pos=admission.position))
+        else:
+            await _edit(message=flow.status_message, body=text(lang, "downloading"))
+        parts = _nonempty([path])
+        try:
+            if not parts:
+                await _on_download_error(flow, user_id, DownloadError("no media produced"))
+                return "ok"
+            if flow.postprocess is not None:
+                await flow.postprocess(parts)
+            total = sum(p.stat().st_size for p in parts)
+            if not settings.fits_upload_limit(total):
+                await _send_links(srv, flow, parts, "audio_mp3", user_id, lang, total, keep_picker=False)
+            else:
+                try:
+                    await _upload_with_retry(srv, bot, flow, parts, "audio_mp3", user_id, lang)
+                except Exception as exc:  # noqa: BLE001
+                    if _link_would_help(exc) and srv.download_links.enabled:
+                        log.info("upload failed (%s); delivering a link instead", type(exc).__name__)
+                        await _send_links(srv, flow, parts, "audio_mp3", user_id, lang, total, keep_picker=False)
+                    else:
+                        log.warning("upload failed user_id=%s site=%s: %s", user_id, flow.url_site, exc)
+                        await _record(
+                            srv.db, user_id, flow.url, flow.url_site, "audio_mp3", "error", "telegram", total, flow.duration
+                        )
+                        await _edit(message=flow.status_message, body=text(lang, "error_upload", error=str(exc)[:300]))
+        finally:
+            _cleanup_pending(flow)
+            cleanup_dir(flow.tmpdir)
+    finally:
+        await srv.queue.leave()
+        await srv.ratelimiter.finish_job(user_id)
+    return "ok"
+
+
 async def _upload_with_retry(
     srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str
 ) -> None:

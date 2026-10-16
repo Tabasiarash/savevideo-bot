@@ -67,6 +67,8 @@ def build_tag_args(
     *,
     title: str,
     artist: str,
+    album: str = "",
+    date: str = "",
     cover: Path | None,
 ) -> list[str]:
     """Assemble the ffmpeg argument list for tagging ``audio`` into ``out``."""
@@ -85,6 +87,10 @@ def build_tag_args(
         args += ["-metadata", f"title={title}"]
     if artist:
         args += ["-metadata", f"artist={artist}"]
+    if album:
+        args += ["-metadata", f"album={album}"]
+    if date:
+        args += ["-metadata", f"date={date}"]
     if has_cover and suffix in MP3_SUFFIXES:
         args += [
             "-id3v2_version",
@@ -103,6 +109,8 @@ async def tag_audio(
     *,
     title: str | None = None,
     artist: str | None = None,
+    album: str | None = None,
+    date: str | None = None,
     cover: Path | None = None,
     timeout: int = 120,
     runner: Callable[[list[str], int], bool] | None = None,
@@ -113,11 +121,15 @@ async def tag_audio(
 
     safe_title = sanitize_tag(title)
     safe_artist = sanitize_tag(artist)
-    if not safe_title and not safe_artist and cover is None:
+    safe_album = sanitize_tag(album)
+    safe_date = sanitize_tag(date)
+    if not any((safe_title, safe_artist, safe_album, safe_date)) and cover is None:
         return False
 
     out = path.with_name(f"{path.stem}.tagged{path.suffix}")
-    args = build_tag_args(path, out, title=safe_title, artist=safe_artist, cover=cover)
+    args = build_tag_args(
+        path, out, title=safe_title, artist=safe_artist, album=safe_album, date=safe_date, cover=cover
+    )
     run = runner or _run_ffmpeg
     try:
         ok = run(args, timeout)
