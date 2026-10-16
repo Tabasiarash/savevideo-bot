@@ -192,3 +192,31 @@ def test_spotify_env_aliases(monkeypatch):
     assert s.spotify_max_items == 7
     assert s.proxy_url_spotify == "socks5h://sp:1080"
 
+
+
+def test_podcasts_disabled_by_default():
+    s = _settings()
+    assert s.enable_podcasts is False
+    assert s.podcast_max_enclosure_bytes == 1024 * 1024 * 1024
+
+
+def test_podcast_regions_list_parsing():
+    assert _settings(podcast_regions="us,de,gb").podcast_regions_list() == ["us", "de", "gb"]
+    assert _settings(podcast_regions="US, de ,").podcast_regions_list() == ["us", "de"]
+    assert _settings(podcast_regions="bogus").podcast_regions_list() == ["us"]
+
+
+def test_proxy_for_podcast_falls_back():
+    assert _settings(proxy_url="socks5h://a:1").proxy_for_podcast() == "socks5h://a:1"
+    assert (
+        _settings(proxy_url="socks5h://a:1", proxy_url_podcast="socks5h://c:3").proxy_for_podcast()
+        == "socks5h://c:3"
+    )
+
+
+def test_podcast_env_aliases(monkeypatch):
+    monkeypatch.setenv("ENABLE_PODCASTS", "true")
+    monkeypatch.setenv("PODCAST_MAX_DURATION_MIN", "90")
+    s = Settings(_env_file=None, bot_token="x")
+    assert s.enable_podcasts is True
+    assert s.podcast_max_duration_min == 90

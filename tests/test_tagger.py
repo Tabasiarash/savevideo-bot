@@ -76,3 +76,37 @@ async def test_tag_audio_requires_something_to_write(tmp_path):
     src = tmp_path / "song.mp3"
     src.write_bytes(b"x")
     assert await tagger.tag_audio(src) is False
+
+
+def test_build_args_includes_album_and_date(tmp_path):
+    args = tagger.build_tag_args(
+        tmp_path / "song.mp3",
+        tmp_path / "out.mp3",
+        title="Episode One",
+        artist="My Show",
+        album="My Show",
+        date="2024-01-01",
+        cover=None,
+    )
+    assert "album=My Show" in args
+    assert "date=2024-01-01" in args
+
+
+def test_build_args_omits_empty_album_and_date(tmp_path):
+    args = tagger.build_tag_args(
+        tmp_path / "song.mp3", tmp_path / "out.mp3", title="T", artist="", cover=None
+    )
+    assert not any(a.startswith("album=") for a in args)
+    assert not any(a.startswith("date=") for a in args)
+
+
+async def test_tag_audio_only_album_still_tags(tmp_path):
+    src = tmp_path / "song.mp3"
+    src.write_bytes(b"original")
+
+    def fake_run(args: list[str], timeout: int) -> bool:
+        Path(args[-1]).write_bytes(b"tagged")
+        return True
+
+    assert await tagger.tag_audio(src, album="My Show", runner=fake_run) is True
+    assert src.read_bytes() == b"tagged"

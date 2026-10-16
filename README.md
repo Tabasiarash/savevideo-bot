@@ -289,6 +289,45 @@ is matched and downloaded through the normal audio path. Matched downloads are
 tagged with the track title/artist and cover art (MP3 ID3 / M4A attached
 picture) via ffmpeg, best-effort.
 
+## Podcast episodes (publisher feed)
+
+A Spotify **episode** is not streamed from Spotify either. When
+`ENABLE_PODCASTS=true` (off by default), the bot resolves the episode to the
+publisher's own audio and sends that file as-is (tagged, never transcoded):
+
+1. **iTunes Search API** — the publisher's `episodeUrl` (the same file a podcast
+   app downloads), matched by title/show/duration.
+2. **The show's RSS/Atom feed** — enclosures parsed with `defusedxml`.
+3. **A YouTube/SoundCloud match** — only as a last resort (typically a
+   Spotify-exclusive) and **clearly labelled** as a possibly-different copy.
+
+The podcast lane is independent of `ENABLE_SPOTIFY`: episodes work with it off,
+and a `SHOW` link gets a short "send an episode link" reply (single episodes are
+supported for now). When the feature is off, an episode link still gets a clear
+"disabled" message and never reaches the generic link flow.
+
+Enclosures are fetched with the bot's own hardened HTTP client (not yt-dlp):
+every redirect hop is validated against private/loopback/link-local addresses
+and the connection is pinned to the checked address, the body must be audio,
+and the size and total time are capped. No cookies are sent.
+
+> **Privacy:** an episode's title and show name are sent to Apple's iTunes
+> Search API to locate the publisher copy.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `ENABLE_PODCASTS` | `false` | Turn podcast-episode resolution on. |
+| `PODCAST_MATCH_SOURCES` | `youtube,soundcloud` | Last-resort match sources. |
+| `PODCAST_MIN_SCORE` | `0.65` | Minimum score (0-1) for a publisher match. |
+| `PODCAST_EXCLUSIVE_MIN_SCORE` | `0.8` | Stricter bar for a last-resort match. |
+| `PODCAST_DURATION_TOL_MIN_S` / `PODCAST_DURATION_TOL_PCT` | `30` / `0.03` | Percentage-based duration tolerance. |
+| `PODCAST_MAX_DURATION_MIN` | `240` | Longest episode accepted. |
+| `PODCAST_MAX_ENCLOSURE_MB` | `1024` | Hard cap on a single enclosure download. |
+| `PODCAST_REGIONS` | `us,de` | iTunes storefronts to search, in order. |
+| `PODCAST_MAX_FEED_BYTES` / `PODCAST_MAX_FEED_ITEMS` | `10485760` / `200` | Feed size/item caps. |
+| `PODCAST_ITUNES_COOLDOWN_S` | `300` | Cooldown per storefront after an iTunes 403/429. |
+| `PROXY_URL_PODCAST` | *(empty)* | Optional proxy for podcast HTTP (falls back to `PROXY_URL`). |
+
 ## Admin commands
 
 | Command | Description |

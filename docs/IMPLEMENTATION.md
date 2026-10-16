@@ -72,7 +72,7 @@ replace an individual service with a fake.
 | Handlers | `bot/handlers/start.py` | `/start`, `/help`, `/language`, deep-link entry. |
 | | `bot/handlers/admin.py` | `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`, `/update_ytdlp`, `/cleanup`, `/health`. |
 | | `bot/handlers/links.py` | Core flow: detect → info → picker → download → upload/cache/link. |
-| | `bot/handlers/spotify.py` | Spotify link detection → metadata → source match → audio picker (feature-gated). |
+| | `bot/handlers/spotify.py` | Spotify link detection → metadata → source match → audio picker; podcast-episode lane (both feature-gated). |
 | | `bot/handlers/inline.py` | Inline mode: cached result or deep-link article. |
 | | `bot/handlers/common.py` | Shared: `register_user`, language resolution, `text()`. |
 | Services | `bot/services/downloader.py` | `YtDlpRunner`: yt-dlp args, cookies, proxy, JS runtime, download, probes, format/quality builder. |
@@ -87,6 +87,12 @@ replace an individual service with a fake.
 | | `bot/services/spotify/http.py` | Blocking curl_cffi GET/POST wrapped for asyncio, byte/redirect limits. |
 | | `bot/services/spotify/metadata.py` | `TrackMeta` via oEmbed + page tags (+ optional Web API), TTL-cached; collection listing. |
 | | `bot/services/spotify/matcher.py` | Candidate scoring (title/artist/duration) + per-source search via `YtDlpRunner`. |
+| | `bot/services/podcast/meta.py` | Episode metadata via oEmbed (+ optional embed-page JSON), TTL-cached. |
+| | `bot/services/podcast/itunes.py` | iTunes Search API lookup (storefront loop, cooldown, scoring). |
+| | `bot/services/podcast/feed.py` | Defensive RSS/Atom enclosure parsing (`defusedxml`, caps). |
+| | `bot/services/podcast/resolver.py` | Resolution order iTunes → RSS → labelled matcher fallback; TTL-cached. |
+| | `bot/services/podcast/scoring.py` | Percentage-based episode scoring (title/show-weighted). |
+| | `bot/services/podcast/download.py` | Hardened enclosure fetch (validated redirects, pinned DNS, size cap, no cookies). |
 | Deploy | `deploy.sh` / `install.sh` | systemd install/update; interactive wizard. |
 | | `deploy/download-links/` | nginx `secure_link` config, secret include, `mint_link.py`. |
 | | `deploy/home-socks/` | Tailscale/`ssh -D` SOCKS egress unit. |
@@ -176,11 +182,22 @@ lives in [`.env.example`](../.env.example); defaults:
 | `SPOTIFY_MAX_ITEMS` | 25 | Cap on items per collection link. |
 | `SPOTIFY_CLIENT_ID`/`_SECRET` | empty | Optional Web API creds (collections need them). |
 | `SPOTIFY_META_CONCURRENCY` | 4 | Parallel metadata fetches for a collection. |
+| `ENABLE_PODCASTS` | false | Podcast-episode resolution (section 14). |
+| `PODCAST_MATCH_SOURCES` | `youtube,soundcloud` | Last-resort match sources. |
+| `PODCAST_MIN_SCORE` | 0.65 | Minimum score for a publisher match. |
+| `PODCAST_EXCLUSIVE_MIN_SCORE` | 0.8 | Stricter bar for a last-resort match. |
+| `PODCAST_DURATION_TOL_MIN_S`/`_PCT` | 30 / 0.03 | Percentage-based duration tolerance. |
+| `PODCAST_MAX_DURATION_MIN` | 240 | Longest episode accepted. |
+| `PODCAST_MAX_ENCLOSURE_MB` | 1024 | Hard cap on a single enclosure download. |
+| `PODCAST_REGIONS` | `us,de` | iTunes storefronts to search, in order. |
+| `PODCAST_MAX_FEED_BYTES`/`_ITEMS` | 10485760 / 200 | Feed size / item caps. |
+| `PODCAST_ITUNES_COOLDOWN_S` | 300 | Cooldown per storefront after a 403/429. |
 
 Derived helpers on `Settings`: `max_duration_s`, `max_mb` (legacy alias),
 `is_local_api`, `upload_limit_bytes`, `fits_upload_limit()`, `cache_ttl_s`,
 `download_link_*`, `min_free_disk_bytes`, `data_dir`, `temp_dir_resolved`,
-`is_admin()`, `spotify_sources()`, `proxy_for_spotify()`.
+`is_admin()`, `spotify_sources()`, `proxy_for_spotify()`,
+`podcast_regions_list()`, `proxy_for_podcast()`, `podcast_max_enclosure_bytes`.
 
 ---
 
@@ -286,6 +303,8 @@ version is recorded in `schema_version`.
 | 1 | `users`, `downloads`, `cache`, `deeplinks`, `counters`, `schema_version` + indexes. |
 | 2 | `download_links` (signed-link registry) + indexes. |
 | 3 | `spotify_meta` (`spotify_id` PK, `type`, `json`, `fetched_at`) + `idx_spotify_meta_fetched`. |
+| 4 | `podcast_meta`, `podcast_audio`, `podcast_itunes` (episode metadata / resolved audio caches + per-storefront cooldowns). |
+
 
 - `cache` is keyed `(url_hash, format_key)` → `file_id`; `url_hash = sha256(normalized_url)`.
 - `counters` holds `cache:hit` / `cache:miss` for the stats hit-rate.
@@ -293,6 +312,9 @@ version is recorded in `schema_version`.
   duration) and drives daily-quota counting and `/stats`.
 - `spotify_meta` caches resolved Spotify metadata JSON with a `fetched_at` stamp; reads
   honour `META_TTL_S` (24 h) and the maintenance loop purges expired rows.
+- `podcast_meta` / `podcast_audio` cache episode metadata and resolved audio (24 h);
+  `podcast_itunes` stores a per-storefront cooldown after an iTunes 403/429. The
+  maintenance loop purges the two caches.
 
 ---
 
@@ -398,3 +420,77 @@ per-item failures are counted and reported.
 
 **Health**: `/health` shows `Spotify: off` or `on [sources] api|no-api`, and the
 masked `PROXY_URL_SPOTIFY` override appears in the proxy summary.
+
+---
+
+## 14. Podcast episodes
+
+Spotify never serves the audio here either. With `ENABLE_PODCASTS=true` (default
+off), a Spotify **episode** link is resolved to the publisher's own audio and
+sent as-is — tagged, never transcoded. The router is shared with section 13
+(`spotify.router`, always registered, before `links.router`), so episode links
+are intercepted whether or not `ENABLE_SPOTIFY` is set.
+
+**Gating.** The podcast and Spotify lanes are independent:
+
+- **episode + `ENABLE_PODCASTS=false`** → `podcast_disabled` reply; the link
+  never reaches `links.router`/yt-dlp.
+- **show + `ENABLE_PODCASTS=true`** → `podcast_show_link` ("send an episode
+  link"); single episodes only in v1. With the flag off a show link falls through
+  to the Spotify collection path as before (so section 13 behaviour is unchanged
+  when the podcast feature is off).
+- music/collection kinds are untouched by this section.
+
+**Resolution order** (`services/podcast/resolver.py`, cached 24 h in
+`podcast_audio`):
+
+1. **iTunes Search** (`podcast/itunes.py`): `media=podcast&entity=podcastEpisode`
+   returns the publisher's own `episodeUrl` (the RSS enclosure). Storefronts from
+   `PODCAST_REGIONS` are searched in order; an episode's title and show name are
+   sent to Apple. A 403/429 stores a per-region cooldown in `podcast_itunes`,
+   honoured by later searches. Candidates are scored; the best at or above
+   `PODCAST_MIN_SCORE` wins.
+2. **RSS/Atom enclosures** (`podcast/feed.py`): the show feed (from iTunes's
+   `feedUrl`, else discovered) is parsed with **`defusedxml`** — never the stdlib
+   parser — bounded by `PODCAST_MAX_FEED_BYTES` and `PODCAST_MAX_FEED_ITEMS`.
+3. **Matched copy** (`find_fallback_match`): only when no publisher copy exists
+   (typically a Spotify-exclusive). Searches `PODCAST_MATCH_SOURCES` through the
+   existing matcher and requires the stricter `PODCAST_EXCLUSIVE_MIN_SCORE`. The
+   result is `is_fallback=True` and the picker is **labelled** ("matched copy
+   from …, may differ"). If nothing clears the bar the user gets a clear
+   `podcast_no_match` ("not available outside Spotify") message.
+
+Episode **metadata** (`podcast/meta.py`) is credential-free and best-effort:
+oEmbed (title + cover) is required; the embed page's `__NEXT_DATA__` JSON (show
+name + exact duration) is **optional** and only merged when present. Results are
+cached in `podcast_meta` for 24 h.
+
+**Scoring** (`podcast/scoring.py`) differs from the music matcher because
+dynamic ad insertion changes lengths: duration uses a **percentage** tolerance
+`max(PODCAST_DURATION_TOL_MIN_S, PODCAST_DURATION_TOL_PCT * duration)` and title
+`0.45` / show `0.35` outweigh duration `0.20`; components with missing data are
+renormalised out.
+
+**Enclosure download** (`podcast/download.py`) is deliberately **not** yt-dlp:
+the generic extractor would follow redirects itself, bypassing SSRF checks. The
+fetcher instead:
+
+- follows redirects manually (max 5) and revalidates **every hop**;
+- resolves each host and blocks private/loopback/link-local/metadata addresses
+  (`utils.ip_is_public`), then pins the connection to the **validated** address
+  via a custom resolver (closes the DNS-rebinding window);
+- requires an `audio/*` or `application/octet-stream` body (a present but
+  non-audio content type is rejected, so error pages are not saved);
+- streams to disk under a hard byte cap (`PODCAST_MAX_ENCLOSURE_MB`) and a total
+  time cap, deleting partial files on any failure;
+- sends **no cookies** (`DummyCookieJar`) and ignores ambient proxy env.
+
+A downloaded enclosure is delivered by `links.deliver_local_file`, which reuses
+the shared upload path: over the Telegram limit (or on an upload that a link
+would fix) it is handed over as a signed download link (section 7); otherwise it
+is uploaded. Tagging writes title, show (artist **and** album) and the release
+date, with cover art, via ffmpeg argument lists.
+
+**Privacy / data sharing.** An episode's title and show name are sent to Apple's
+iTunes Search API to locate the publisher copy. This is stated in the README and
+`.env.example`.
