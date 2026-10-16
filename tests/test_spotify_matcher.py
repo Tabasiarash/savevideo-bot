@@ -55,6 +55,13 @@ def test_text_similarity_tolerates_extra_words():
     assert score > 0.5
 
 
+def test_normalize_keeps_non_latin_scripts():
+    # ASCII-only normalisation would erase these titles and score every
+    # multilingual episode as 0, so the script must survive.
+    assert matcher.normalize_text("قسمت ۸۱: انسان و بتن") == "قسمت ۸۱ انسان و بتن"
+    assert matcher.text_similarity("قسمت ۸۱: انسان و بتن", "قسمت ۸۱ انسان و بتن") == 1.0
+
+
 def test_score_perfect_match():
     cand = matcher.Candidate("u", "Never Gonna Give You Up", "Rick Astley", 213.0, "youtube")
     assert matcher.score_candidate(META, cand, 4) > 0.95

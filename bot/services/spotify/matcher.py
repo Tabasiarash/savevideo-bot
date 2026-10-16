@@ -38,7 +38,10 @@ _NOISE = re.compile(
     re.I,
 )
 _BRACKETS = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
-_NON_ALNUM = re.compile(r"[^a-z0-9\s]+")
+# Unicode-aware: keep letters/digits of any script (Persian, Cyrillic, CJK, …),
+# drop punctuation/symbols and the underscore. ASCII-only would erase non-Latin
+# titles entirely, making every multilingual match score zero.
+_NON_ALNUM = re.compile(r"[^\w\s]|_")
 _WS = re.compile(r"\s+")
 
 WEIGHT_TITLE = 0.60

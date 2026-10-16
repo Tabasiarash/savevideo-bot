@@ -51,6 +51,22 @@ def test_score_prefers_title_and_show():
     assert wrong < exact
 
 
+def test_non_latin_title_clears_min_score():
+    # A Persian episode whose title and show match exactly must score near 1.0,
+    # not zero; otherwise iTunes/feed results are wrongly discarded.
+    score = score_candidate(
+        title="قسمت ۸۱: انسان و بتن",
+        show="Sekke Podcast | پادکست سکه",
+        duration_s=4804.47,
+        cand_title="قسمت ۸۱: انسان و بتن",
+        cand_show="Sekke Podcast | پادکست سکه",
+        cand_duration_s=4805.0,
+        tol_min_s=30,
+        tol_pct=0.03,
+    )
+    assert score > 0.9
+
+
 # --------------------------------------------------------------------------
 # feed parsing
 # --------------------------------------------------------------------------
