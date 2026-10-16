@@ -3,6 +3,7 @@ from __future__ import annotations
 from bot.services.podcast import feed, itunes, resolver
 from bot.services.podcast.meta import EpisodeMeta
 from bot.services.podcast.scoring import duration_score, duration_tolerance, score_candidate
+from bot.services.spotify import matcher
 from bot.services.spotify.http import HttpResponse
 from bot.services.spotify.matcher import Candidate
 
@@ -310,3 +311,75 @@ def _fake_enclosures(items):
         return items
 
     return _inner
+
+
+# --------------------------------------------------------------------------
+# exclusive fallback (no publisher copy exists)
+# --------------------------------------------------------------------------
+
+
+def _fallback_meta():
+    return EpisodeMeta(spotify_id=_ref().id, title="Episode One", show="My Show", duration_s=3600.0)
+
+
+async def test_resolver_no_publisher_and_no_match_returns_none(db, settings, monkeypatch):
+    # iTunes empty, RSS not consulted (no feed), matcher finds nothing.
+    monkeypatch.setattr(resolver, "search_episode", _no_itunes)
+
+    async def fake_search(runner, source, query, **kwargs):
+        return []
+
+    monkeypatch.setattr(matcher, "search_source", fake_search)
+    assert await resolver.resolve_episode_audio(db, None, settings, _fallback_meta(), _ref()) is None
+
+
+async def test_fallback_accepts_strong_match(db, settings, monkeypatch):
+    # Title and duration exact, show a near-but-not-identical spelling: the
+    # score clears the stricter exclusive threshold (0.80) but is not a perfect
+    # publisher match.
+    async def fake_search(runner, source, query, **kwargs):
+        if source == "youtube":
+            return [Candidate("https://youtu.be/x", "Episode One", "My Show Weekly", 3600.0, "youtube")]
+        return []
+
+    monkeypatch.setattr(matcher, "search_source", fake_search)
+    best, tried = await resolver.find_fallback_match(None, settings, _fallback_meta())
+    assert best is not None
+    assert best.score >= settings.podcast_exclusive_min_score
+    assert "youtube" in tried
+
+
+async def test_fallback_rejects_weak_match(db, settings, monkeypatch):
+    # Same title but a wildly wrong show and duration keeps the score below the
+    # exclusive threshold even though it clears the publisher one.
+    async def fake_search(runner, source, query, **kwargs):
+        return [Candidate("https://youtu.be/x", "Episode One", "Zzz Qqq", 60.0, source)]
+
+    monkeypatch.setattr(matcher, "search_source", fake_search)
+    best, tried = await resolver.find_fallback_match(None, settings, _fallback_meta())
+    assert best is None
+    assert tried  # it did search, just did not accept
+
+
+async def test_fallback_prefers_best_source(db, settings, monkeypatch):
+    async def fake_search(runner, source, query, **kwargs):
+        if source == "youtube":
+            return [Candidate("https://youtu.be/low", "Episode One", "My Show", 3600.0, "youtube")]
+        return [Candidate("https://soundcloud.com/hi", "Episode One", "My Show", 3600.0, "soundcloud")]
+
+    monkeypatch.setattr(matcher, "search_source", fake_search)
+    best, _ = await resolver.find_fallback_match(None, settings, _fallback_meta())
+    assert best is not None and best.source == "youtube"  # exact score, first wins
+
+
+async def test_resolver_exclusive_fallback_is_labelled(db, settings, monkeypatch):
+    monkeypatch.setattr(resolver, "search_episode", _no_itunes)
+
+    async def fake_search(runner, source, query, **kwargs):
+        return [Candidate("https://youtu.be/x", "Episode One", "My Show", 3600.0, source)]
+
+    monkeypatch.setattr(matcher, "search_source", fake_search)
+    resolved = await resolver.resolve_episode_audio(db, None, settings, _fallback_meta(), _ref())
+    assert resolved is not None
+    assert resolved.is_fallback is True
+    assert resolved.source == "youtube"
