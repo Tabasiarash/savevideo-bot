@@ -44,6 +44,7 @@ class FakeMessage:
         self.sent: list[str] = []
         self.edits: list[str] = []
         self.markups: list[object] = []
+        self.edit_kwargs: list[dict] = []
         self.deleted = False
 
     async def answer(self, body, reply_markup=None, **kwargs):
@@ -54,6 +55,7 @@ class FakeMessage:
     async def edit_text(self, body, reply_markup=None, **kwargs):
         self.edits.append(body)
         self.markups.append(reply_markup)
+        self.edit_kwargs.append(kwargs)
 
     async def delete(self) -> None:
         self.deleted = True

@@ -38,7 +38,7 @@ from bot.services import podcast, tagger
 from bot.services.breaker import Breaker
 from bot.services.downloader import cleanup_dir
 from bot.services.spotify import matcher, metadata, urls
-from bot.utils import extract_urls
+from bot.utils import extract_urls, safe_display_url
 
 log = logging.getLogger(__name__)
 
@@ -396,6 +396,11 @@ async def _deliver_episode_enclosure(
     user = message.from_user
     assert user is not None
 
+    if not links.disk_space_ok():
+        await links.edit_message(message=status, body=text(lang, "disk_low"))
+        cleanup_dir(tmpdir)
+        return
+
     await links.edit_message(message=status, body=text(lang, "podcast_downloading"))
     try:
         path = await podcast.stream_enclosure(
@@ -406,8 +411,18 @@ async def _deliver_episode_enclosure(
             filename_hint=resolved.title or meta.title or "episode",
         )
     except podcast.EnclosureTooLarge:
+        # The file was never fetched, so a hosted link is impossible; give the
+        # user the publisher's own URL instead (sanitised — it is feed data).
+        publisher = safe_display_url(resolved.audio_url)
         await links.edit_message(
-            message=status, body=text(lang, "podcast_too_large", max=settings.podcast_max_enclosure_mb)
+            message=status,
+            body=text(
+                lang,
+                "podcast_too_large_link",
+                max=settings.podcast_max_enclosure_mb,
+                url=publisher or "-",
+            ),
+            disable_preview=True,
         )
         cleanup_dir(tmpdir)
         return

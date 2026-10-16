@@ -188,7 +188,7 @@ lives in [`.env.example`](../.env.example); defaults:
 | `PODCAST_EXCLUSIVE_MIN_SCORE` | 0.8 | Stricter bar for a last-resort match. |
 | `PODCAST_DURATION_TOL_MIN_S`/`_PCT` | 30 / 0.03 | Percentage-based duration tolerance. |
 | `PODCAST_MAX_DURATION_MIN` | 240 | Longest episode accepted. |
-| `PODCAST_MAX_ENCLOSURE_MB` | 1024 | Hard cap on a single enclosure download. |
+| `PODCAST_MAX_ENCLOSURE_MB` | 1024 | Hard cap on what the bot will fetch; over it, the publisher URL is shown (never fetched). |
 | `PODCAST_REGIONS` | `us,de` | iTunes storefronts to search, in order. |
 | `PODCAST_MAX_FEED_BYTES`/`_ITEMS` | 10485760 / 200 | Feed size / item caps. |
 | `PODCAST_ITUNES_COOLDOWN_S` | 300 | Cooldown per storefront after a 403/429. |
@@ -484,6 +484,21 @@ fetcher instead:
 - streams to disk under a hard byte cap (`PODCAST_MAX_ENCLOSURE_MB`) and a total
   time cap, deleting partial files on any failure;
 - sends **no cookies** (`DummyCookieJar`) and ignores ambient proxy env.
+
+The two size limits are deliberately separate:
+
+- **Over `MAX_UPLOAD_MB` (Telegram), after a successful download.** The file is
+  on disk, so `links.deliver_local_file` hands it to the signed hosted-link flow
+  (section 7) instead of uploading.
+- **Over `PODCAST_MAX_ENCLOSURE_MB`, during the download.** Nothing is on disk,
+  so `EnclosureTooLarge` is answered with the publisher's own URL as plain text
+  (`podcast_too_large_link`, link previews disabled) rather than a dead-end
+  error. The URL comes from untrusted feed data, so it is sanitised first
+  (`utils.safe_display_url`): http/https only, credentials and control/whitespace
+  characters stripped, length capped — and it is **never fetched**. The matcher
+  fallback is not used here (a different copy would be just as large). The disk
+  free-space check runs **before** the download starts, so a large enclosure is
+  refused up front when the disk is low.
 
 A downloaded enclosure is delivered by `links.deliver_local_file`, which reuses
 the shared upload path: over the Telegram limit (or on an upload that a link

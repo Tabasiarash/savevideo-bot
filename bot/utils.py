@@ -18,6 +18,10 @@ log = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
+# Control characters and whitespace that must never appear inside a URL we show
+# (a value can arrive straight from untrusted feed data).
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f\s]")
+
 # Query parameters that are pure tracking noise and are stripped for cache keys.
 _TRACKING_PARAMS = {
     "si",
@@ -150,6 +154,36 @@ def hostname_from_url(url: str) -> str:
     parts = urlsplit(url)
     host = parts.hostname or ""
     return _canonical_host(host)
+
+
+def safe_display_url(url: str | None, *, max_len: int = 2000) -> str | None:
+    """Return a sanitised URL to show a user, or ``None`` if it is unusable.
+
+    The value can come straight from untrusted feed data, so it is restricted to
+    http/https, stripped of embedded credentials and control/whitespace
+    characters, and capped in length. It is only ever displayed, never fetched.
+    """
+    if url is None:
+        return None
+    raw = _CONTROL_CHARS.sub("", str(url)).strip()
+    if not raw:
+        return None
+    parts = urlsplit(raw)
+    if parts.scheme.lower() not in ("http", "https"):
+        return None
+    host = parts.hostname
+    if not host:
+        return None
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if ":" in host:  # IPv6 literal
+        host = f"[{host}]"
+    if port:
+        host = f"{host}:{port}"
+    clean = urlunsplit((parts.scheme.lower(), host, parts.path, parts.query, ""))
+    return clean[:max_len] or None
 
 
 def site_from_url(url: str) -> str:

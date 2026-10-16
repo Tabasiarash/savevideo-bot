@@ -13,6 +13,7 @@ from bot.utils import (
     ip_is_public,
     is_supported_scheme,
     normalize_url,
+    safe_display_url,
     sanitize_filename,
     site_from_url,
 )
@@ -158,3 +159,42 @@ def test_fits_upload_limit_applies_margin():
     assert fits_upload_limit(99 * 1024 * 1024, limit) is False
     assert fits_upload_limit(0, limit) is True
     assert fits_upload_limit(10, 0) is False
+
+
+# --- safe_display_url -----------------------------------------------------
+
+
+def test_safe_display_url_keeps_normal_urls():
+    assert safe_display_url("https://cdn.example.com/a.mp3") == "https://cdn.example.com/a.mp3"
+    assert safe_display_url("http://cdn.example.com/a.mp3?x=1&y=2") == (
+        "http://cdn.example.com/a.mp3?x=1&y=2"
+    )
+
+
+def test_safe_display_url_strips_credentials():
+    assert safe_display_url("https://user:pass@cdn.example.com/a.mp3") == (
+        "https://cdn.example.com/a.mp3"
+    )
+
+
+def test_safe_display_url_strips_control_and_whitespace():
+    assert safe_display_url("https://cdn.example.com/a\tb.mp3") == "https://cdn.example.com/ab.mp3"
+    assert safe_display_url("https://cdn.example.com/a\x00b\n.mp3") == (
+        "https://cdn.example.com/ab.mp3"
+    )
+
+
+@pytest.mark.parametrize("bad", ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,x"])
+def test_safe_display_url_rejects_non_http(bad):
+    assert safe_display_url(bad) is None
+
+
+@pytest.mark.parametrize("bad", [None, "", "   ", "https://"])
+def test_safe_display_url_rejects_empty(bad):
+    assert safe_display_url(bad) is None
+
+
+def test_safe_display_url_caps_length():
+    long = "https://cdn.example.com/" + "a" * 5000
+    assert safe_display_url(long) is not None
+    assert len(safe_display_url(long)) == 2000

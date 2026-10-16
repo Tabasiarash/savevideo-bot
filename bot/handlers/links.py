@@ -27,6 +27,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InputMediaPhoto,
     InputMediaVideo,
+    LinkPreviewOptions,
     Message,
 )
 
@@ -328,6 +329,11 @@ def _min_free_ok() -> bool:
         return disk_free_bytes(settings.temp_dir_resolved) >= settings.min_free_disk_bytes
     except OSError:
         return True
+
+
+def disk_space_ok() -> bool:
+    """Public check for callers that download to disk before delivering (e.g. podcast enclosures)."""
+    return _min_free_ok()
 
 
 async def download_flow(bot: Bot, flow: PendingFlow, fmt: str, user_id: int) -> str:
@@ -821,9 +827,15 @@ def picker_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
     return _build_keyboard(flow)
 
 
-async def edit_message(*, message: Message | None, body: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
+async def edit_message(
+    *,
+    message: Message | None,
+    body: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    disable_preview: bool = False,
+) -> None:
     """Public wrapper around the internal safe-edit helper."""
-    await _edit(message=message, body=body, reply_markup=reply_markup)
+    await _edit(message=message, body=body, reply_markup=reply_markup, disable_preview=disable_preview)
 
 
 def _choose_text(flow: PendingFlow) -> str:
@@ -885,11 +897,23 @@ class _ProgressEditor:
         await _edit(message=self.flow.status_message, body=get_text(self.flow.lang, "progress", pct=round(percent, 1)))
 
 
-async def _edit(*, message: Message | None, body: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
+async def _edit(
+    *,
+    message: Message | None,
+    body: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    disable_preview: bool = False,
+) -> None:
     if message is None:
         return
     try:
-        if reply_markup is not None:
+        link_preview = LinkPreviewOptions(is_disabled=True) if disable_preview else None
+        if link_preview is not None:
+            if reply_markup is not None:
+                await message.edit_text(body, reply_markup=reply_markup, link_preview_options=link_preview)
+            else:
+                await message.edit_text(body, link_preview_options=link_preview)
+        elif reply_markup is not None:
             await message.edit_text(body, reply_markup=reply_markup)
         else:
             await message.edit_text(body)

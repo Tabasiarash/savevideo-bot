@@ -84,6 +84,37 @@ async def test_filter_matches_episode_links(make_message):
     assert await flt(make_message(text=SHOW_URL)) is True
 
 
+async def test_episode_lane_is_independent_of_spotify_flag(services, make_message, monkeypatch, settings):
+    # Podcasts on, music off: an episode link must still be handled by the
+    # podcast lane and never fall through to the catch-all handler.
+    monkeypatch.setattr(settings, "enable_podcasts", True, raising=False)
+    monkeypatch.setattr(settings, "enable_spotify", False, raising=False)
+    _stub_meta(monkeypatch)
+    _stub_resolve(monkeypatch, ENCLOSURE)
+
+    async def fake_stream(url, dest_dir, **kwargs):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path = dest_dir / "episode.mp3"
+        path.write_bytes(b"AUDIO-BYTES")
+        return path
+
+    async def fake_artwork(url, dest):
+        return None
+
+    async def fake_tag(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(spotify.podcast, "stream_enclosure", fake_stream)
+    monkeypatch.setattr(spotify, "_download_artwork", fake_artwork)
+    monkeypatch.setattr(spotify.tagger, "tag_audio", fake_tag)
+
+    msg = make_message(text=EPISODE_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    assert len(services.bot.audios) == 1
+    assert services.runner.info_calls == []  # never reached the catch-all
+
+
 # -- flow -------------------------------------------------------------------
 
 
@@ -129,7 +160,9 @@ async def test_episode_fallback_presents_labelled_picker(services, make_message,
     assert flow is not None
     assert flow.url == "https://youtu.be/x"
     assert flow.url_site == "youtube"
-    assert "youtube" in msg.edits[-1]
+    # The user is told this is a matched copy, not the publisher's audio.
+    label = get_text("en", "podcast_fallback_pick", title="Episode One", show="Sekke Podcast", source="youtube")
+    assert label in msg.edits
     assert msg.markups[-1] is not None
 
 
@@ -167,7 +200,7 @@ async def test_episode_enclosure_delivers_audio(services, make_message, monkeypa
     assert links._pending == {}
 
 
-async def test_stream_enclosure_too_large_is_reported(services, make_message, monkeypatch, settings):
+async def test_stream_enclosure_too_large_sends_publisher_link(services, make_message, monkeypatch, settings):
     _enable(monkeypatch, settings)
     _stub_meta(monkeypatch)
     _stub_resolve(monkeypatch, ENCLOSURE)
@@ -178,7 +211,96 @@ async def test_stream_enclosure_too_large_is_reported(services, make_message, mo
     monkeypatch.setattr(spotify.podcast, "stream_enclosure", fake_stream)
     msg = make_message(text=EPISODE_URL)
     await spotify.on_spotify_message(msg, services.bot)
-    assert get_text("en", "podcast_too_large", max=settings.podcast_max_enclosure_mb) in msg.edits
+    expected = get_text(
+        "en",
+        "podcast_too_large_link",
+        max=settings.podcast_max_enclosure_mb,
+        url="https://cdn.example.com/ep1.mp3",
+    )
+    assert expected in msg.edits
+    # The publisher link is shown as plain text, with the preview suppressed.
+    idx = msg.edits.index(expected)
+    preview = msg.edit_kwargs[idx].get("link_preview_options")
+    assert preview is not None and preview.is_disabled is True
+    assert links._pending == {}
+
+
+async def test_too_large_link_sanitizes_publisher_url(services, make_message, monkeypatch, settings):
+    # The publisher URL is feed data: credentials must never reach the user.
+    _enable(monkeypatch, settings)
+    _stub_meta(monkeypatch)
+    dirty = ResolvedEpisode(
+        audio_url="https://user:pass@cdn.example.com/ep1.mp3",
+        source="itunes",
+        title="Episode One",
+        show="Sekke Podcast",
+        duration_s=3600.0,
+        is_fallback=False,
+    )
+    _stub_resolve(monkeypatch, dirty)
+
+    async def fake_stream(url, dest_dir, **kwargs):
+        raise spotify.podcast.EnclosureTooLarge("too big")
+
+    monkeypatch.setattr(spotify.podcast, "stream_enclosure", fake_stream)
+    msg = make_message(text=EPISODE_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+    assert any("https://cdn.example.com/ep1.mp3" in e for e in msg.edits)
+    assert not any("user:pass@" in e for e in msg.edits)
+
+
+async def test_enclosure_disk_low_skips_download(services, make_message, monkeypatch, settings):
+    _enable(monkeypatch, settings)
+    _stub_meta(monkeypatch)
+    _stub_resolve(monkeypatch, ENCLOSURE)
+    monkeypatch.setattr(links, "disk_space_ok", lambda: False)
+
+    called = False
+
+    async def fake_stream(url, dest_dir, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("must not download when disk is low")
+
+    monkeypatch.setattr(spotify.podcast, "stream_enclosure", fake_stream)
+    msg = make_message(text=EPISODE_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+    assert called is False
+    assert get_text("en", "disk_low") in msg.edits
+
+
+async def test_enclosure_over_upload_limit_becomes_hosted_link(
+    services, make_message, monkeypatch, settings
+):
+    # The enclosure downloaded fine but exceeds Telegram's upload cap, so it must
+    # be handed to the hosted-link flow instead of being uploaded.
+    _enable(monkeypatch, settings)
+    monkeypatch.setattr(settings, "max_upload_mb", 1, raising=False)
+    _stub_meta(monkeypatch)
+    _stub_resolve(monkeypatch, ENCLOSURE)
+
+    async def fake_stream(url, dest_dir, **kwargs):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path = dest_dir / "episode.mp3"
+        path.write_bytes(b"\x00" * (2 * 1024 * 1024))
+        return path
+
+    async def fake_artwork(url, dest):
+        return None
+
+    async def fake_tag(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(spotify.podcast, "stream_enclosure", fake_stream)
+    monkeypatch.setattr(spotify, "_download_artwork", fake_artwork)
+    monkeypatch.setattr(spotify.tagger, "tag_audio", fake_tag)
+
+    msg = make_message(text=EPISODE_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    assert services.bot.audios == []  # no Telegram upload attempted
+    assert any("http://links.test/dl/" in e for e in msg.edits)
+    assert links._pending == {}
 
 
 async def test_stream_enclosure_error_is_reported(services, make_message, monkeypatch, settings):

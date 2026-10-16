@@ -188,7 +188,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Spotify-exclusive. Spotify audio itself is never downloaded."
         ),
         "podcast_too_long": "❌ This episode is longer than {max} minutes, which is the limit.",
-        "podcast_too_large": "❌ The episode file is larger than {max} MB.",
+        "podcast_too_large_link": (
+            "⚠️ This episode's audio is larger than the {max} MB the bot will fetch, so it was "
+            "not downloaded. You can get it from the publisher here:\n{url}"
+        ),
         "podcast_download_failed": "❌ Downloading the episode from the publisher failed.",
         "podcast_fallback_pick": (
             "🎙️ <b>{title}</b>\n👤 {show}\n\n"
@@ -372,7 +375,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Möglicherweise ist sie Spotify-exklusiv. Spotify-Audio wird nie heruntergeladen."
         ),
         "podcast_too_long": "❌ Diese Folge ist länger als {max} Minuten (Limit).",
-        "podcast_too_large": "❌ Die Datei der Folge ist größer als {max} MB.",
+        "podcast_too_large_link": (
+            "⚠️ Das Audio dieser Folge ist größer als die {max} MB, die der Bot lädt; es wurde "
+            "deshalb nicht heruntergeladen. Du kannst es hier direkt beim Anbieter holen:\n{url}"
+        ),
         "podcast_download_failed": "❌ Das Herunterladen der Folge vom Herausgeber ist fehlgeschlagen.",
         "podcast_fallback_pick": (
             "🎙️ <b>{title}</b>\n👤 {show}\n\n"
@@ -553,7 +559,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "صدای اسپاتیفای هرگز دانلود نمی‌شود."
         ),
         "podcast_too_long": "❌ این قسمت طولانی‌تر از {max} دقیقه است (حد مجاز).",
-        "podcast_too_large": "❌ حجم فایل این قسمت بیشتر از {max} مگابایت است.",
+        "podcast_too_large_link": (
+            "⚠️ صدای این قسمت از {max} مگابایتی که ربات دانلود می‌کند بزرگ‌تر است، بنابراین "
+            "دانلود نشد. می‌توانید آن را از خود ناشر بگیرید:\n{url}"
+        ),
         "podcast_download_failed": "❌ دانلود قسمت از ناشر ناموفق بود.",
         "podcast_fallback_pick": (
             "🎙️ <b>{title}</b>\n👤 {show}\n\n"

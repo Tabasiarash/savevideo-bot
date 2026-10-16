@@ -39,6 +39,14 @@ def test_get_text_unknown_key_returns_key():
     assert get_text(EN, "definitely_missing_key") == "definitely_missing_key"
 
 
+def test_podcast_too_large_link_present_and_formats():
+    # The publisher link fallback must exist in every language and interpolate.
+    for lang in SUPPORTED_LANGUAGES:
+        out = get_text(lang, "podcast_too_large_link", max=500, url="https://cdn.example.com/a.mp3")
+        assert "500" in out
+        assert "https://cdn.example.com/a.mp3" in out
+
+
 def test_get_text_never_crashes_on_bad_kwargs():
     text = get_text(EN, "language_set")
     assert "{" in text  # placeholder left untouched, not an exception
