@@ -39,8 +39,10 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         elif path == "/html":
             _write(writer, 200, {"Content-Type": "text/html; charset=utf-8"}, b"<html>nope</html>")
         elif path == "/declare-big":
-            # Declares a huge body up front; the fetcher must abort on the header.
-            _write(writer, 200, {"Content-Type": "audio/mpeg", "Content-Length": "1000000000"})
+            # Declares a body larger than the cap up front; the fetcher must
+            # abort on the header rather than stream it in.
+            body = b"x" * 5000
+            _write(writer, 200, {"Content-Type": "audio/mpeg", "Content-Length": str(len(body))}, body)
         elif path == "/stream-big":
             # No Content-Length: the fetcher must enforce the cap while streaming.
             _write(writer, 200, {"Content-Type": "audio/mpeg"}, b"x" * 5000)

@@ -1,18 +1,20 @@
-"""Fetch a podcast enclosure with a hardened, redirect-aware HTTP client.
+"""Download a podcast episode's enclosure (the publisher's own audio file).
 
-Podcast enclosures are plain ``http(s)`` files on arbitrary publisher/CDN
-hosts, so they are **not** handed to yt-dlp (whose generic extractor would
-follow redirects itself, bypassing our SSRF checks). This module does the whole
-request under our control:
+The enclosure URL comes from third-party data (an RSS feed or iTunes), so it is
+treated as untrusted:
 
-* every redirect hop is followed manually (max 5), and each hop's host is
-  resolved and rejected if it points at a private/loopback/link-local/metadata
-  address;
-* the connection is made to the **validated** address (a pinned resolver), not
-  to a freshly-resolved one, which closes the DNS-rebinding window;
-* the response must look like audio (``audio/*`` or ``application/octet-stream``);
-* the body is streamed to disk with a hard size cap and a total-time cap;
-* no cookies are ever sent (a throwaway ``DummyCookieJar``).
+* the fetch runs through the bot's own HTTP client (curl_cffi, the same one used
+  for Spotify metadata) with a browser fingerprint — many podcast CDNs (e.g. the
+  CloudFront host behind Spreaker) reject clients that do not present one;
+* redirects are followed **manually** (max 5). Every hop's host is resolved and
+  rejected if it points at a private / loopback / link-local / metadata address,
+  and the connection is pinned to the **validated** address via
+  ``CurlOpt.RESOLVE`` so a second, attacker-controlled DNS answer (rebinding)
+  cannot be used to reach an internal host;
+* the response must look like audio (``audio/*`` or octet-stream), the body is
+  streamed to disk under a byte cap and a total-time budget, and the partial
+  file is removed on any failure;
+* cookies are never sent and no proxy environment variables are read.
 
 The result is the publisher's original file; it is tagged, never transcoded.
 """
@@ -21,125 +23,40 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
+import ipaddress
 import socket
+import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
-import aiohttp
+import curl_cffi.requests as cffi
+from curl_cffi.const import CurlOpt
+from curl_cffi.requests import exceptions as cffi_errors
 
-from bot.utils import ip_is_public, resolve_host_addresses, sanitize_filename
-
-log = logging.getLogger(__name__)
+from bot.utils import ip_is_public, sanitize_filename
 
 _MAX_REDIRECTS = 5
-_ALLOWED_SCHEMES = ("http://", "https://")
-_ALLOWED_CONTENT_PREFIXES = ("audio/",)
-_ALLOWED_CONTENT_TYPES = ("application/octet-stream", "application/ogg")
-_CHUNK = 64 * 1024
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_AUDIO_PREFIX = "audio/"
+_OCTET_TYPES = frozenset({"application/octet-stream", "application/ogg"})
+_IMPERSONATE = "chrome"
+_USER_AGENT = "Mozilla/5.0 (compatible; savevideo-bot/1.0)"
 
 
 class EnclosureError(Exception):
-    """Base error for a failed enclosure fetch."""
+    """Base class for enclosure download failures."""
 
 
 class EnclosureTooLarge(EnclosureError):
-    """The enclosure exceeds the configured size cap."""
+    """The enclosure is larger than the configured cap."""
 
 
 class EnclosureBlocked(EnclosureError):
-    """The URL or a redirect hop pointed at a non-public address."""
+    """A hop resolved to a non-public address, or the scheme is unsupported."""
 
 
 class EnclosureNotFound(EnclosureError):
     """The server did not return a downloadable audio body."""
-
-
-class _PinnedResolver(aiohttp.abc.AbstractResolver):
-    """Resolves only to pre-validated addresses (rebinding protection)."""
-
-    def __init__(self, mapping: dict[str, list[str]]) -> None:
-        self._mapping = mapping
-
-    async def resolve(self, host: str, port: int = 0, family: int = 0):  # noqa: ANN001
-        addrs = self._mapping.get(host)
-        if not addrs:
-            raise OSError(f"no validated address for host {host!r}")
-        return [
-            {
-                "hostname": host,
-                "host": ip,
-                "port": port or 0,
-                "family": socket.AF_INET6 if ":" in ip else socket.AF_INET,
-                "proto": 0,
-                "flags": 0,
-            }
-            for ip in addrs
-        ]
-
-    async def close(self) -> None:  # pragma: no cover - aiohttp calls this
-        return None
-
-
-def _as_literal(host: str) -> str | None:
-    import ipaddress
-
-    try:
-        return str(ipaddress.ip_address(host.strip()))
-    except ValueError:
-        return None
-
-
-async def _validated_addresses(host: str) -> list[str]:
-    """Resolve ``host`` and return only its public addresses (rebinding-safe)."""
-    if not host:
-        raise EnclosureBlocked("missing host")
-    literal = _as_literal(host)
-    if literal is not None:
-        if not ip_is_public(literal):
-            raise EnclosureBlocked(f"host is not public: {host!r}")
-        return [literal]
-    addresses = await resolve_host_addresses(host)
-    if not addresses:
-        raise EnclosureBlocked(f"could not resolve host: {host!r}")
-    public = [ip for ip in addresses if ip_is_public(ip)]
-    if not public:
-        raise EnclosureBlocked(f"host {host!r} resolves only to non-public addresses")
-    return public
-
-
-def _join(base: str, location: str) -> str:
-    from urllib.parse import urljoin
-
-    return urljoin(base, location)
-
-
-def _extension_for(content_type: str | None, url: str) -> str:
-    lowered = (content_type or "").lower()
-    if "mpeg" in lowered or "mp3" in lowered:
-        return ".mp3"
-    if "mp4" in lowered or "m4a" in lowered or "aac" in lowered:
-        return ".m4a"
-    if "ogg" in lowered or "opus" in lowered:
-        return ".ogg"
-    if "wav" in lowered:
-        return ".wav"
-    suffix = Path(urlsplit(url).path).suffix.lower()
-    if suffix in (".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aac"):
-        return suffix
-    return ".mp3"
-
-
-def _content_type_allowed(value: str | None) -> bool:
-    """Reject obvious non-audio responses (HTML error pages, JSON, …).
-
-    A missing header is tolerated — many CDNs omit it — but a *present* type
-    must look like audio, otherwise an error page would be saved as a file.
-    """
-    if not value:
-        return True
-    lowered = value.lower().split(";", 1)[0].strip()
-    return lowered.startswith(_ALLOWED_CONTENT_PREFIXES) or lowered in _ALLOWED_CONTENT_TYPES
 
 
 async def stream_enclosure(
@@ -152,106 +69,207 @@ async def stream_enclosure(
     hop_timeout: float = 30.0,
     filename_hint: str | None = None,
 ) -> Path:
-    """Download ``url`` to ``dest_dir`` and return the written file.
+    """Download ``url`` into ``dest_dir`` and return the written file's path.
 
-    Raises :class:`EnclosureError` (or a subclass) on any policy violation.
+    ``filename_hint`` (e.g. the episode title) is used for the file name when
+    given; otherwise the URL's last path segment is used.
+
+    Raises an :class:`EnclosureError` subclass on failure; the partial file (if
+    any) is always removed.
     """
-    if not url.lower().startswith(_ALLOWED_SCHEMES):
+    if not url.startswith(("http://", "https://")):
         raise EnclosureBlocked(f"unsupported scheme: {url!r}")
+    return await asyncio.to_thread(
+        _download,
+        url,
+        dest_dir,
+        max_bytes=max_bytes,
+        proxy=proxy,
+        total_timeout=max(1.0, total_timeout),
+        hop_timeout=max(1.0, hop_timeout),
+        filename_hint=filename_hint,
+    )
 
+
+def _download(
+    url: str,
+    dest_dir: Path,
+    *,
+    max_bytes: int,
+    proxy: str | None,
+    total_timeout: float,
+    hop_timeout: float,
+    filename_hint: str | None,
+) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    current = url
+    deadline = time.monotonic() + total_timeout
+    proxies = {"http": proxy, "https": proxy} if proxy else None
     seen: set[str] = set()
+    current = url
 
-    for _hop in range(_MAX_REDIRECTS + 1):
+    for _ in range(_MAX_REDIRECTS + 1):
         if current in seen:
             raise EnclosureError("redirect loop")
         seen.add(current)
 
-        split = urlsplit(current)
-        if split.scheme not in ("http", "https"):
-            raise EnclosureBlocked(f"unsupported scheme: {split.scheme!r}")
-        host = split.hostname or ""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise EnclosureError("total time budget exceeded")
 
-        # Validate every hop. With a proxy the egress resolves the name, so we
-        # can only assert it is publicly routable; the pin below is what makes
-        # the direct case rebinding-safe.
-        addresses = await _validated_addresses(host)
+        parts = urlsplit(current)
+        if parts.scheme not in ("http", "https"):
+            raise EnclosureBlocked(f"unsupported scheme: {parts.scheme!r}")
+        host = parts.hostname or ""
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        addresses = _resolve_public(host)
 
-        connector_kwargs: dict = {}
+        # Pin the connection to the address we just validated, unless a proxy
+        # (which does its own resolution) is in use. The check above stands.
+        options = None
         if not proxy:
-            connector_kwargs["resolver"] = _PinnedResolver({host: addresses})
+            options = {CurlOpt.RESOLVE: [f"{host}:{port}:{ip}" for ip in addresses]}
 
-        timeout = aiohttp.ClientTimeout(total=total_timeout, connect=hop_timeout, sock_read=hop_timeout)
-        jar = aiohttp.DummyCookieJar()  # never stores or sends cookies
-        connector = aiohttp.TCPConnector(**connector_kwargs)
-        async with aiohttp.ClientSession(
-            connector=connector, cookie_jar=jar, timeout=timeout, trust_env=False
-        ) as session, session.get(
-            current,
-            allow_redirects=False,
-            proxy=proxy,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; savevideo-bot podcast fetcher)"},
-        ) as resp:
-            status = resp.status
-            location = resp.headers.get("Location")
+        with cffi.Session(impersonate=_IMPERSONATE, curl_options=options) as session:
+            try:
+                resp = session.get(
+                    current,
+                    allow_redirects=False,
+                    stream=True,
+                    timeout=(min(hop_timeout, remaining), remaining),
+                    proxies=proxies,
+                    discard_cookies=True,
+                    headers={"User-Agent": _USER_AGENT},
+                )
+            except cffi_errors.RequestException as exc:
+                raise EnclosureError(f"download failed: {exc}") from exc
+            try:
+                status = resp.status_code
+                if status in _REDIRECT_STATUSES:
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise EnclosureError(f"redirect with no location (HTTP {status})")
+                    current = urljoin(current, location)
+                    continue
+                try:
+                    return _save_body(
+                        resp, current, dest_dir, max_bytes, deadline, filename_hint
+                    )
+                except cffi_errors.RequestException as exc:
+                    raise EnclosureError(f"download failed: {exc}") from exc
+            finally:
+                with contextlib.suppress(Exception):
+                    resp.close()
 
-            if status in (301, 302, 303, 307, 308):
-                if not location:
-                    raise EnclosureError(f"redirect with no location (HTTP {status})")
-                current = _join(current, location)
-                continue
-
-            if status != 200:
-                raise EnclosureNotFound(f"unexpected HTTP status {status}")
-
-            content_type = resp.headers.get("Content-Type")
-            if not _content_type_allowed(content_type):
-                raise EnclosureError(f"non-audio content type: {content_type!r}")
-
-            declared = _content_length(resp.headers)
-            if declared is not None and declared > max_bytes:
-                raise EnclosureTooLarge(f"enclosure declares {declared} bytes (cap {max_bytes})")
-
-            name = sanitize_filename(filename_hint or Path(urlsplit(url).path).stem) or "episode"
-            dest = dest_dir / f"{name}{_extension_for(content_type, current)}"
-            written = await _stream_body(resp, dest, max_bytes)
-            log.info("podcast enclosure ok bytes=%d type=%s url=%s", written, content_type, host)
-            return dest
-
-    raise EnclosureError(f"too many redirects (>{_MAX_REDIRECTS})")
+    raise EnclosureError(f"too many redirects (> {_MAX_REDIRECTS})")
 
 
-def _content_length(headers) -> int | None:
-    raw = headers.get("Content-Length")
-    if not raw:
-        return None
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return value if value >= 0 else None
+def _save_body(
+    resp,
+    url: str,
+    dest_dir: Path,
+    max_bytes: int,
+    deadline: float,
+    filename_hint: str | None,
+) -> Path:
+    status = resp.status_code
+    if status != 200:
+        raise EnclosureNotFound(f"unexpected HTTP {status}")
 
+    content_type = resp.headers.get("content-type")
+    if not _content_type_allowed(content_type):
+        raise EnclosureError(f"non-audio content type: {content_type!r}")
 
-async def _stream_body(resp, dest: Path, max_bytes: int) -> int:
-    total = 0
+    declared = _content_length(resp.headers.get("content-length"))
+    if declared is not None and declared > max_bytes:
+        raise EnclosureTooLarge(f"enclosure declares {declared} bytes")
+
+    ext = _extension_for(content_type, url)
+    stem = filename_hint or Path(urlsplit(url).path).stem
+    name = sanitize_filename(stem) or "episode"
+    dest = dest_dir / f"{name}{ext}"
+    written = 0
     try:
         with dest.open("wb") as handle:
-            async for chunk in resp.content.iter_chunked(_CHUNK):
-                total += len(chunk)
-                if total > max_bytes:
+            for chunk in resp.iter_content():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > max_bytes:
                     raise EnclosureTooLarge(f"enclosure exceeds {max_bytes} bytes")
+                if time.monotonic() > deadline:
+                    raise EnclosureError("total time budget exceeded")
                 handle.write(chunk)
-    except EnclosureTooLarge:
-        await asyncio.to_thread(_unlink_quietly, dest)
+    except BaseException:
+        _unlink_quietly(dest)
         raise
-    except Exception:
-        await asyncio.to_thread(_unlink_quietly, dest)
-        raise
-    if total == 0:
-        await asyncio.to_thread(_unlink_quietly, dest)
+    if written == 0:
+        _unlink_quietly(dest)
         raise EnclosureError("empty enclosure body")
-    return total
+    return dest
+
+
+def _resolve_public(host: str) -> list[str]:
+    """Return public addresses for ``host`` or raise :class:`EnclosureBlocked`."""
+    if not host:
+        raise EnclosureBlocked("missing host")
+    literal = _as_address(host)
+    if literal is not None:
+        if not ip_is_public(literal):
+            raise EnclosureBlocked(f"host is not public: {host!r}")
+        return [literal]
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        raise EnclosureBlocked(f"could not resolve host: {host!r}") from exc
+    public = sorted({info[4][0] for info in infos if ip_is_public(info[4][0])})
+    if not public:
+        raise EnclosureBlocked(f"host {host!r} resolves only to non-public addresses")
+    return public
+
+
+def _as_address(host: str) -> str | None:
+    try:
+        return str(ipaddress.ip_address(host.strip()))
+    except ValueError:
+        return None
+
+
+def _content_type_allowed(value: str | None) -> bool:
+    """Accept audio, a generic octet-stream, or a missing type.
+
+    A *present* non-audio type (an HTML/XML error page) is rejected so an error
+    body is never saved as an episode.
+    """
+    if not value:
+        return True
+    lowered = value.lower().split(";", 1)[0].strip()
+    return lowered.startswith(_AUDIO_PREFIX) or lowered in _OCTET_TYPES
+
+
+def _content_length(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        number = int(value.strip())
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _extension_for(content_type: str | None, url: str) -> str:
+    lowered = (content_type or "").lower()
+    if "mpeg" in lowered or "mp3" in lowered:
+        return ".mp3"
+    if any(token in lowered for token in ("mp4", "m4a", "aac")):
+        return ".m4a"
+    if any(token in lowered for token in ("ogg", "opus")):
+        return ".ogg"
+    if "wav" in lowered:
+        return ".wav"
+    suffix = Path(urlsplit(url).path).suffix.lower()
+    if suffix in {".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aac"}:
+        return suffix
+    return ".mp3"
 
 
 def _unlink_quietly(path: Path) -> None:
