@@ -21,6 +21,7 @@ matched track is then downloaded and sent in turn.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -52,6 +53,10 @@ _AUDIO_SUFFIXES = tagger.SUPPORTED_SUFFIXES
 # Callback data for the "try another match" button.
 _REMATCH_PREFIX = "sp:rematch"
 
+# How many candidates a single card may cycle through before the "try another
+# match" button is dropped, so a request cannot hammer the sources forever.
+MAX_REMATCH_CANDIDATES = 3
+
 
 @dataclass
 class _MatchState:
@@ -64,6 +69,10 @@ class _MatchState:
     lang: str
     status_message: Message
     excluded: set[str] = field(default_factory=set)
+    created_at: float = field(default_factory=time.time)
+
+    def is_expired(self) -> bool:
+        return (time.time() - self.created_at) > links.PENDING_TTL_S
 
 
 # At most one active Spotify match per user (rate limiting prevents overlap).
@@ -202,6 +211,18 @@ async def on_rematch(callback: CallbackQuery) -> None:
         await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
         return
 
+    if state.is_expired():
+        _matches.pop(user.id, None)
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        await links.edit_message(
+            message=state.status_message, body=text(state.lang, "expired_selection")
+        )
+        return
+
+    if len(state.excluded) >= MAX_REMATCH_CANDIDATES:
+        await callback.answer(text(state.lang, "spotify_no_more_matches"), show_alert=True)
+        return
+
     await callback.answer()
     await links.edit_message(message=state.status_message, body=text(state.lang, "spotify_searching"))
 
@@ -310,14 +331,15 @@ async def _present(state: _MatchState, candidate: matcher.Candidate) -> None:
     )
 
     kb = links.picker_keyboard(flow)
-    kb.inline_keyboard.append(
-        [
-            InlineKeyboardButton(
-                text=text(lang, "button_try_another"),
-                callback_data=f"{_REMATCH_PREFIX}:{ref.id}",
-            )
-        ]
-    )
+    if len(state.excluded) < MAX_REMATCH_CANDIDATES:
+        kb.inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=text(lang, "button_try_another"),
+                    callback_data=f"{_REMATCH_PREFIX}:{ref.id}",
+                )
+            ]
+        )
 
     await links.edit_message(message=state.status_message, body=body, reply_markup=kb)
 

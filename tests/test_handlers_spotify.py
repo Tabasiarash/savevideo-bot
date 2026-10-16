@@ -248,6 +248,85 @@ async def test_rematch_stale_id_ignored(services, make_message, monkeypatch, set
     assert links._pending[USER_ID].url == "https://youtu.be/good"
 
 
+async def test_rematch_after_ttl_expires(
+    services, make_message, monkeypatch, settings, make_callback
+):
+    import time
+
+    from tests.conftest import USER_ID
+
+    spotify._matches.clear()
+    _prime_state(monkeypatch, settings, [matcher.MatchResult(_cand("https://youtu.be/good"), ["youtube"], 0.99)])
+    msg = make_message(text=TRACK_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    # Age the state past the shared TTL.
+    spotify._matches[USER_ID].created_at = time.time() - links.PENDING_TTL_S - 1
+
+    cb = make_callback(data=f"sp:rematch:{TRACK_ID}", message=msg)
+    await spotify.on_rematch(cb)
+
+    assert cb.answers and cb.answers[-1][1] is True
+    assert get_text("en", "expired_selection") in cb.answers[-1][0]
+    assert USER_ID not in spotify._matches
+
+
+async def test_rematch_button_dropped_after_third_candidate(
+    services, make_message, monkeypatch, settings, make_callback
+):
+    from tests.conftest import USER_ID
+
+    spotify._matches.clear()
+    _prime_state(monkeypatch, settings, [matcher.MatchResult(_cand("https://youtu.be/good"), ["youtube"], 0.99)])
+
+    msg = make_message(text=TRACK_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    # Candidate 1 presented: button should be present (excluded has 1 entry).
+    assert spotify._matches[USER_ID].excluded == {"https://youtu.be/good"}
+
+    # Rematch -> candidate 2 (excluded = 2), still under the cap.
+    async def match2(*a, **k):
+        return matcher.MatchResult(_cand("https://youtu.be/alt2"), ["youtube"], 0.98)
+
+    monkeypatch.setattr(spotify.matcher, "find_match", match2)
+    await spotify.on_rematch(make_callback(data=f"sp:rematch:{TRACK_ID}", message=msg))
+    assert spotify._matches[USER_ID].excluded == {
+        "https://youtu.be/good",
+        "https://youtu.be/alt2",
+    }
+
+    # Rematch -> candidate 3 (excluded = 3) -> the button is now dropped.
+    async def match3(*a, **k):
+        return matcher.MatchResult(_cand("https://youtu.be/alt3"), ["youtube"], 0.97)
+
+    monkeypatch.setattr(spotify.matcher, "find_match", match3)
+    await spotify.on_rematch(make_callback(data=f"sp:rematch:{TRACK_ID}", message=msg))
+
+    last_markup = msg.markups[-1]
+    rematch_present = any(
+        getattr(btn, "callback_data", "") == f"sp:rematch:{TRACK_ID}"
+        for row in last_markup.inline_keyboard
+        for btn in row
+    )
+    assert not rematch_present, "rematch button should be gone after the third candidate"
+
+    # A further rematch press is refused without hitting the matcher again.
+    calls = {"n": 0}
+
+    async def match4(*a, **k):
+        calls["n"] += 1
+        return matcher.MatchResult(_cand("https://youtu.be/alt4"), ["youtube"], 0.96)
+
+    monkeypatch.setattr(spotify.matcher, "find_match", match4)
+    cb = make_callback(data=f"sp:rematch:{TRACK_ID}", message=msg)
+    await spotify.on_rematch(cb)
+
+    assert calls["n"] == 0
+    assert cb.answers and cb.answers[-1][1] is True
+    assert get_text("en", "spotify_no_more_matches") in cb.answers[-1][0]
+
+
 # -- collections ------------------------------------------------------------
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from bot.handlers import links
+from bot.i18n import get_text
 from bot.services.downloader import InfoError
 from bot.utils import URLBlockedError
 
@@ -155,6 +156,21 @@ async def test_on_format_pick_expired(services, make_callback):
     await links.on_format_pick(cb, services.bot)
     assert cb.answers[0][1] is True
     assert cb.answers[0][0]
+
+
+async def test_format_pick_after_ttl_is_rejected(services, runner, make_message, make_callback):
+    """A picker older than PENDING_TTL_S must not act; it answers 'expired' and drops."""
+    import time
+
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    links._pending[USER].created_at = time.time() - links.PENDING_TTL_S - 1
+
+    cb = make_callback(data="dl:video_720", message=msg)
+    await links.on_format_pick(cb, services.bot)
+
+    assert get_text("en", "expired_selection") in cb.answers[0][0]
+    assert USER not in links._pending
 
 
 async def test_on_format_pick_cancel(services, runner, make_message, make_callback):

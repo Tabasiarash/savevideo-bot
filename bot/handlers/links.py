@@ -14,7 +14,7 @@ import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -98,13 +98,23 @@ class PendingFlow:
     cache_key: str | None = None
     audio_meta: AudioMeta | None = None
     postprocess: PostprocessHook | None = None
+    # When the flow was prepared; a picker older than PENDING_TTL_S is stale and
+    # its buttons answer with "expired_selection" instead of acting on it.
+    created_at: float = field(default_factory=time.time)
 
     @property
     def url_hash(self) -> str:
         return self.cache_key or url_hash(self.url)
 
 
+# A picker left idle this long is dropped so a stale inline keyboard cannot act.
+PENDING_TTL_S = 15 * 60
+
 _pending: dict[int, PendingFlow] = {}
+
+
+def _flow_expired(flow: PendingFlow) -> bool:
+    return (time.time() - flow.created_at) > PENDING_TTL_S
 
 
 # --------------------------------------------------------------------------
@@ -266,6 +276,11 @@ async def on_format_pick(callback: CallbackQuery, bot: Bot) -> None:
 
     if flow is None or flow.prefix != prefix:
         await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+
+    if _flow_expired(flow):
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        _cleanup_pending(flow)
         return
 
     if fmt == "cancel":
