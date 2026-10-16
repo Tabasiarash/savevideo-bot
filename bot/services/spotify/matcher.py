@@ -15,6 +15,7 @@ from __future__ import annotations
 import difflib
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,32 @@ _BRACKETS = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
 # titles entirely, making every multilingual match score zero.
 _NON_ALNUM = re.compile(r"[^\w\s]|_")
 _WS = re.compile(r"\s+")
+# Zero-width joiners/marks (incl. the Persian half-space ZWNJ) join morphemes;
+# remove them outright so "می\u200cدهد" and "میدهد" compare equal.
+_ZERO_WIDTH = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff]")
+
+# Fold the spelling drift between Arabic and Persian for the same sound, so a
+# title from one source matches the same title from another (e.g. an iTunes show
+# name spelled with Arabic yeh vs a Spotify one with Farsi yeh).
+_ARABIC_FOLD = str.maketrans(
+    {
+        "\u064a": "\u06cc",  # ARABIC YEH      -> FARSI YEH
+        "\u0649": "\u06cc",  # ALEF MAKSURA    -> FARSI YEH
+        "\u0626": "\u06cc",  # YEH WITH HAMZA  -> FARSI YEH
+        "\u0643": "\u06a9",  # ARABIC KAF      -> KEHEH
+        "\u0629": "\u0647",  # TEH MARBUTA     -> HEH
+        "\u0623": "\u0627",  # ALEF WITH HAMZA -> ALEF
+        "\u0625": "\u0627",  # ALEF WITH HAMZA -> ALEF
+        "\u0622": "\u0627",  # ALEF WITH MADDA -> ALEF
+        "\u0624": "\u0648",  # WAW WITH HAMZA  -> WAW
+    }
+)
+# Arabic-Indic and Extended Arabic-Indic (Persian) digits -> ASCII, so "۸۱",
+# "٨١" and "81" all compare equal.
+_DIGITS_FOLD = str.maketrans(
+    "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
+    "01234567890123456789",
+)
 
 WEIGHT_TITLE = 0.60
 WEIGHT_ARTIST = 0.25
@@ -67,8 +94,11 @@ class MatchResult:
 
 
 def normalize_text(text: str | None) -> str:
-    """Lower-case, drop bracketed asides/noise words and punctuation."""
-    value = _BRACKETS.sub(" ", text or "")
+    """Lower-case, fold script variants, drop noise words and punctuation."""
+    value = unicodedata.normalize("NFKC", text or "")
+    value = _ZERO_WIDTH.sub("", value)
+    value = value.translate(_ARABIC_FOLD).translate(_DIGITS_FOLD)
+    value = _BRACKETS.sub(" ", value)
     value = _NOISE.sub(" ", value).lower()
     value = _NON_ALNUM.sub(" ", value)
     return _WS.sub(" ", value).strip()

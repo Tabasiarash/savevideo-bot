@@ -67,6 +67,36 @@ def test_non_latin_title_clears_min_score():
     assert score > 0.9
 
 
+def test_score_folds_script_and_digit_variants():
+    # Candidate from a source that spells the title differently (Arabic yeh,
+    # Persian digits) must still score near-perfectly.
+    score = score_candidate(
+        title="قسمت ۸۱: انسان و بتن",
+        show="پادکست سکه",
+        duration_s=4804.0,
+        cand_title="قسمت 81 انسان و بتن",
+        cand_show="پادكست سكه",
+        cand_duration_s=4805.0,
+        tol_min_s=30,
+        tol_pct=0.03,
+    )
+    assert score > 0.9
+
+
+def test_score_supports_cjk():
+    score = score_candidate(
+        title="東京ポッドキャスト 第5回",
+        show="東京ポッドキャスト",
+        duration_s=1800.0,
+        cand_title="東京ポッドキャスト 第5回",
+        cand_show="東京ポッドキャスト",
+        cand_duration_s=1801.0,
+        tol_min_s=30,
+        tol_pct=0.03,
+    )
+    assert score > 0.9
+
+
 # --------------------------------------------------------------------------
 # feed parsing
 # --------------------------------------------------------------------------

@@ -58,8 +58,43 @@ def test_text_similarity_tolerates_extra_words():
 def test_normalize_keeps_non_latin_scripts():
     # ASCII-only normalisation would erase these titles and score every
     # multilingual episode as 0, so the script must survive.
-    assert matcher.normalize_text("قسمت ۸۱: انسان و بتن") == "قسمت ۸۱ انسان و بتن"
-    assert matcher.text_similarity("قسمت ۸۱: انسان و بتن", "قسمت ۸۱ انسان و بتن") == 1.0
+    assert matcher.normalize_text("قسمت ۸۱: انسان و بتن") == "قسمت 81 انسان و بتن"
+    assert matcher.text_similarity("قسمت ۸۱: انسان و بتن", "قسمت 81: انسان و بتن") == 1.0
+
+
+def test_normalize_folds_arabic_and_persian_variants():
+    # The same sound spelled with Arabic vs Farsi letters must compare equal.
+    assert matcher.text_similarity("يك", "یک") == 1.0
+    assert matcher.text_similarity("كتاب", "کتاب") == 1.0
+    assert matcher.text_similarity("أحمد", "احمد") == 1.0
+
+
+def test_normalize_folds_digits():
+    # Persian and Arabic-Indic digits must match ASCII.
+    assert matcher.text_similarity("قسمت ۸۱", "قسمت 81") == 1.0
+    assert matcher.text_similarity("الحلقة ٨١", "الحلقة 81") == 1.0
+
+
+def test_normalize_removes_zero_width_joiner():
+    # The Persian half-space (ZWNJ) joins morphemes; dropping it must not split.
+    assert matcher.normalize_text("می\u200cدهد") == "میدهد"
+    assert matcher.text_similarity("می\u200cدهد", "میدهد") == 1.0
+
+
+def test_normalize_mixed_latin_and_persian():
+    assert matcher.text_similarity("Episode ۵: فصل", "episode 5 فصل") == 1.0
+
+
+def test_normalize_keeps_cjk():
+    assert matcher.normalize_text("東京 2024") == "東京 2024"
+
+
+def test_normalize_empty_never_matches():
+    # A string that vanishes after normalisation must not match anything.
+    assert matcher.normalize_text("!!! --- ???") == ""
+    assert matcher.text_similarity("!!!", "???") == 0.0
+    assert matcher.text_similarity("", "anything") == 0.0
+    assert matcher.text_similarity("anything", "") == 0.0
 
 
 def test_score_perfect_match():
