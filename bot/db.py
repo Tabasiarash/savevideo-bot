@@ -109,6 +109,36 @@ MIGRATIONS: dict[int, list[str]] = {
         """,
         "CREATE INDEX IF NOT EXISTS idx_spotify_meta_fetched ON spotify_meta(fetched_at)",
     ],
+    4: [
+        # Podcast episode cache: the credential-free metadata read for a Spotify
+        # episode (title/show/duration/cover/feed) and the resolved publisher
+        # enclosure. Only public RSS/audio pointers are stored; no Spotify audio.
+        """
+        CREATE TABLE IF NOT EXISTS podcast_meta (
+            spotify_id TEXT PRIMARY KEY,
+            json       TEXT NOT NULL,
+            fetched_at INTEGER NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_podcast_meta_fetched ON podcast_meta(fetched_at)",
+        # Resolved enclosure per episode (iTunes/RSS), separate from the metadata
+        # so a rematch can reuse it without re-querying the sources.
+        """
+        CREATE TABLE IF NOT EXISTS podcast_audio (
+            spotify_id TEXT PRIMARY KEY,
+            json       TEXT NOT NULL,
+            fetched_at INTEGER NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_podcast_audio_fetched ON podcast_audio(fetched_at)",
+        # Per-iTunes-storefront cooldown so a rate-limit back-off is shared.
+        """
+        CREATE TABLE IF NOT EXISTS podcast_itunes (
+            region        TEXT PRIMARY KEY,
+            blocked_until INTEGER NOT NULL
+        )
+        """,
+    ],
 }
 
 
@@ -444,6 +474,78 @@ class Database:
         cur = await self._conn.execute("DELETE FROM spotify_meta WHERE fetched_at < ?", (cutoff,))
         await self._conn.commit()
         return int(cur.rowcount)
+
+    # -- podcast caches --------------------------------------------------------
+
+    async def podcast_meta_get(self, spotify_id: str, ttl_s: int) -> str | None:
+        assert self._conn is not None
+        cutoff = int(time.time()) - ttl_s
+        cur = await self._conn.execute(
+            "SELECT json FROM podcast_meta WHERE spotify_id = ? AND fetched_at > ?",
+            (spotify_id, cutoff),
+        )
+        row = await cur.fetchone()
+        return str(row["json"]) if row else None
+
+    async def podcast_meta_put(self, spotify_id: str, payload_json: str) -> None:
+        await self._execute(
+            """
+            INSERT OR REPLACE INTO podcast_meta (spotify_id, json, fetched_at)
+            VALUES (?, ?, ?)
+            """,
+            (spotify_id, payload_json, int(time.time())),
+        )
+
+    async def podcast_audio_get(self, spotify_id: str, ttl_s: int) -> str | None:
+        assert self._conn is not None
+        cutoff = int(time.time()) - ttl_s
+        cur = await self._conn.execute(
+            "SELECT json FROM podcast_audio WHERE spotify_id = ? AND fetched_at > ?",
+            (spotify_id, cutoff),
+        )
+        row = await cur.fetchone()
+        return str(row["json"]) if row else None
+
+    async def podcast_audio_put(self, spotify_id: str, payload_json: str) -> None:
+        await self._execute(
+            """
+            INSERT OR REPLACE INTO podcast_audio (spotify_id, json, fetched_at)
+            VALUES (?, ?, ?)
+            """,
+            (spotify_id, payload_json, int(time.time())),
+        )
+
+    async def podcast_audio_purge_expired(self, ttl_s: int) -> int:
+        assert self._conn is not None
+        cutoff = int(time.time()) - ttl_s
+        cur = await self._conn.execute("DELETE FROM podcast_audio WHERE fetched_at < ?", (cutoff,))
+        await self._conn.commit()
+        return int(cur.rowcount)
+
+    async def podcast_meta_purge_expired(self, ttl_s: int) -> int:
+        assert self._conn is not None
+        cutoff = int(time.time()) - ttl_s
+        cur = await self._conn.execute("DELETE FROM podcast_meta WHERE fetched_at < ?", (cutoff,))
+        await self._conn.commit()
+        return int(cur.rowcount)
+
+    async def podcast_itunes_blocked_until(self, region: str) -> int:
+        """Unix time until which this storefront should be skipped (0 = none)."""
+        assert self._conn is not None
+        cur = await self._conn.execute(
+            "SELECT blocked_until FROM podcast_itunes WHERE region = ?", (region,)
+        )
+        row = await cur.fetchone()
+        return int(row["blocked_until"]) if row else 0
+
+    async def podcast_itunes_block(self, region: str, until: int) -> None:
+        await self._execute(
+            """
+            INSERT OR REPLACE INTO podcast_itunes (region, blocked_until)
+            VALUES (?, ?)
+            """,
+            (region, until),
+        )
 
     # -- stats ---------------------------------------------------------------
 

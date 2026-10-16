@@ -133,6 +133,40 @@ class Settings(BaseSettings):
     # Parallel metadata fetches when expanding a collection.
     spotify_meta_concurrency: int = 4
 
+    # --- Podcasts (episode audio; independent feature, OFF by default) -------
+    # Episodes are resolved from the publisher's public RSS/audio found via the
+    # iTunes Search API. Spotify audio is never fetched; the enclosure is the
+    # original publisher file, sent as-is (tagged, not transcoded).
+    #
+    # NOTE: an episode's title and show name are sent to Apple's iTunes Search
+    # API when this feature is used.
+    enable_podcasts: bool = False
+    # Fallback search sources when no publisher enclosure is found.
+    podcast_match_sources: str = "youtube,soundcloud"
+    # Minimum matcher score (0..1) for a fallback (non-publisher) candidate.
+    podcast_min_score: float = 0.65
+    # Stricter bar for a Spotify-exclusive episode, where a YouTube copy is the
+    # only option and a mismatch is more likely.
+    podcast_exclusive_min_score: float = 0.8
+    # Duration tolerance is percentage-based (dynamic ads change lengths):
+    # a candidate within max(PODCAST_DURATION_TOL_MIN_S, PCT * duration) matches.
+    podcast_duration_tol_min_s: int = 30
+    podcast_duration_tol_pct: float = 0.03
+    # Longest episode accepted (minutes). Telegram's upload cap still applies.
+    podcast_max_duration_min: int = 240
+    # Hard cap on a single enclosure download (bytes). Independent of the
+    # Telegram upload limit: larger files are still delivered as a link.
+    podcast_max_enclosure_mb: int = 1024
+    # iTunes storefronts to search, in priority order (shows are regional).
+    podcast_regions: str = "us,de"
+    # RSS feed size / item caps (feeds are untrusted input).
+    podcast_max_feed_bytes: int = 10 * 1024 * 1024
+    podcast_max_feed_items: int = 200
+    # Cooldown (seconds) after an iTunes rate-limit / error, per region.
+    podcast_itunes_cooldown_s: int = 300
+    # Optional proxy for podcast HTTP (metadata + enclosure), no cookies.
+    proxy_url_podcast: str = ""
+
     # --- Storage ---
     db_path: str = "data/savevideo.db"
     temp_dir: str = "tmp"
@@ -257,6 +291,22 @@ class Settings(BaseSettings):
 
     def proxy_for_spotify(self) -> str:
         return self.proxy_url_spotify.strip() or self.proxy_url.strip()
+
+    def podcast_regions_list(self) -> list[str]:
+        """Normalised iTunes storefronts to search, in priority order."""
+        seen: list[str] = []
+        for part in self.podcast_regions.split(","):
+            code = part.strip().lower()
+            if len(code) == 2 and code.isalpha() and code not in seen:
+                seen.append(code)
+        return seen or ["us"]
+
+    def proxy_for_podcast(self) -> str:
+        return self.proxy_url_podcast.strip() or self.proxy_url.strip()
+
+    @property
+    def podcast_max_enclosure_bytes(self) -> int:
+        return max(1, self.podcast_max_enclosure_mb) * 1024 * 1024
 
     @property
     def data_dir(self) -> Path:
