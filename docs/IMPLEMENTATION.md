@@ -188,7 +188,7 @@ lives in [`.env.example`](../.env.example); defaults:
 | `PODCAST_EXCLUSIVE_MIN_SCORE` | 0.8 | Stricter bar for a last-resort match. |
 | `PODCAST_DURATION_TOL_MIN_S`/`_PCT` | 30 / 0.03 | Percentage-based duration tolerance. |
 | `PODCAST_MAX_DURATION_MIN` | 240 | Longest episode accepted. |
-| `PODCAST_MAX_ENCLOSURE_MB` | 1024 | Hard cap on what the bot will fetch; over it, the publisher URL is shown (never fetched). |
+| `PODCAST_MAX_ENCLOSURE_MB` | 500 | Hard cap on what the bot will fetch; over it, the publisher URL is shown (never fetched). |
 | `PODCAST_REGIONS` | `us,de` | iTunes storefronts to search, in order. |
 | `PODCAST_MAX_FEED_BYTES`/`_ITEMS` | 10485760 / 200 | Feed size / item caps. |
 | `PODCAST_ITUNES_COOLDOWN_S` | 300 | Cooldown per storefront after a 403/429. |

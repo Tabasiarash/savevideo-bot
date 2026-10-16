@@ -197,7 +197,7 @@ def test_spotify_env_aliases(monkeypatch):
 def test_podcasts_disabled_by_default():
     s = _settings()
     assert s.enable_podcasts is False
-    assert s.podcast_max_enclosure_bytes == 1024 * 1024 * 1024
+    assert s.podcast_max_enclosure_bytes == 500 * 1024 * 1024
 
 
 def test_podcast_regions_list_parsing():

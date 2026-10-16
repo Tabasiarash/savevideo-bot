@@ -154,12 +154,13 @@ class Settings(BaseSettings):
     podcast_duration_tol_pct: float = 0.03
     # Longest episode accepted (minutes). Telegram's upload cap still applies.
     podcast_max_duration_min: int = 240
-    # Hard cap on a single enclosure download (bytes). This only stops abuse:
-    # a 240-minute episode at 128 kbps is roughly 230 MB. Independent of the
-    # Telegram upload limit — a file that downloads but exceeds the upload limit
-    # is still delivered as a hosted link, while one over *this* cap is never
-    # fetched and the publisher's own URL is shown instead.
-    podcast_max_enclosure_mb: int = 1024
+    # Hard cap on a single enclosure download (bytes). This only stops abuse: a
+    # 240-minute episode at 128 kbps is roughly 230 MB, so 500 MB leaves room for
+    # higher-bitrate files without letting one request pull a gigabyte onto the
+    # disk. Independent of the Telegram upload limit — a file that downloads but
+    # exceeds the upload limit is still delivered as a hosted link, while one over
+    # *this* cap is never fetched and the publisher's own URL is shown instead.
+    podcast_max_enclosure_mb: int = 500
     # iTunes storefronts to search, in priority order (shows are regional).
     podcast_regions: str = "us,de"
     # RSS feed size / item caps (feeds are untrusted input).
