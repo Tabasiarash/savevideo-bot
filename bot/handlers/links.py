@@ -36,6 +36,7 @@ from bot.db import url_hash
 from bot.deps import get_services
 from bot.handlers.common import is_banned, register_user, text
 from bot.i18n import get_text, language_code_to_code
+from bot.services import subtitles
 from bot.services.download_links import LinkError
 from bot.services.downloader import (
     DownloadError,
@@ -47,6 +48,7 @@ from bot.services.downloader import (
     probe_media,
     video_quality_rows,
 )
+from bot.services.subtitles import SubtitleOption
 from bot.utils import (
     URLBlockedError,
     URLParseError,
@@ -99,6 +101,13 @@ class PendingFlow:
     cache_key: str | None = None
     audio_meta: AudioMeta | None = None
     postprocess: PostprocessHook | None = None
+    # Subtitle flow: the options offered with the picker, the quality the user
+    # picked (needed because the subtitle/mode prompts act across callbacks) and
+    # the final subtitle/mode selection.
+    subtitle_options: list[SubtitleOption] = field(default_factory=list)
+    chosen_format: str | None = None
+    chosen_subtitle: SubtitleOption | None = None
+    chosen_mode: str | None = None
     # When the flow was prepared; a picker older than PENDING_TTL_S is stale and
     # its buttons answer with "expired_selection" instead of acting on it.
     created_at: float = field(default_factory=time.time)
@@ -196,8 +205,9 @@ async def handle_urls(message: Message, urls: list[str], playlist: bool) -> None
     tmpdir.mkdir(parents=True, exist_ok=True)
     status_message = await message.answer(text(lang, "url_fetching"))
 
+    want_subs = settings.enable_subtitles and not playlist
     try:
-        info = await _extract(srv, url, playlist=playlist, tmpdir=tmpdir)
+        info = await _extract(srv, url, playlist=playlist, tmpdir=tmpdir, want_subtitles=want_subs)
     except InfoError as exc:
         await _on_info_error(status_message, lang, user.id, url, exc)
         cleanup_dir(tmpdir)
@@ -209,7 +219,7 @@ async def handle_urls(message: Message, urls: list[str], playlist: bool) -> None
         return
 
     duration = float(info.get("duration") or 0)
-    if duration and duration > settings.max_duration_s:
+    if duration and duration > settings.max_duration_s and not settings.is_admin(user.id):
         minutes = int(duration // 60)
         await _edit(
             message=status_message,
@@ -232,6 +242,12 @@ async def handle_urls(message: Message, urls: list[str], playlist: bool) -> None
         lang=lang,
         status_message=status_message,
     )
+    if want_subs:
+        flow.subtitle_options = subtitles.available_subtitle_options(info, lang)
+        # Don't retain the (potentially hundreds of) caption maps in the flow or
+        # logs: the two/three picks above are all we need.
+        info.pop("automatic_captions", None)
+        info.pop("subtitles", None)
     _pending[user.id] = flow
 
     if playlist and info.get("entries"):
@@ -297,8 +313,73 @@ async def on_format_pick(callback: CallbackQuery, bot: Bot) -> None:
         await _send_thumbnail(callback, bot, flow, lang)
         return
 
+    if fmt.startswith("sub:"):
+        await callback.answer()
+        await _on_subtitle_pick(callback, bot, flow, fmt[len("sub:") :], lang)
+        return
+
+    if fmt.startswith("submode:"):
+        await callback.answer()
+        await _on_submode_pick(callback, bot, flow, fmt[len("submode:") :], lang)
+        return
+
     await callback.answer()
+    if _should_offer_subtitles(flow, fmt):
+        flow.chosen_format = fmt
+        flow.chosen_subtitle = None
+        flow.chosen_mode = None
+        await _edit(
+            message=callback.message,
+            body=_subtitle_text(flow),
+            reply_markup=_subtitle_keyboard(flow, 0),
+        )
+        return
     await _run_download(callback, bot, flow, fmt)
+
+
+def _should_offer_subtitles(flow: PendingFlow, fmt: str) -> bool:
+    return (
+        settings.enable_subtitles
+        and bool(flow.subtitle_options)
+        and fmt.startswith("video")
+        and flow.prefix != "pl"
+        and not _is_gallery(flow)
+    )
+
+
+async def _on_subtitle_pick(callback: CallbackQuery, bot: Bot, flow: PendingFlow, value: str, lang: str) -> None:
+    if value == "none":
+        flow.chosen_subtitle = None
+        flow.chosen_mode = None
+        await _run_download(callback, bot, flow, flow.chosen_format or "")
+        return
+    if value.startswith("more:"):
+        try:
+            page = int(value[len("more:") :])
+        except ValueError:
+            return
+        await _edit(message=callback.message, body=_subtitle_text(flow), reply_markup=_subtitle_keyboard(flow, page))
+        return
+    try:
+        index = int(value)
+        option = flow.subtitle_options[index]
+    except (ValueError, IndexError):
+        return
+    flow.chosen_subtitle = option
+    flow.chosen_mode = settings.normalize_subtitle_mode(await _stored_subtitle_mode(callback.from_user.id))
+    await _edit(
+        message=callback.message,
+        body=_subtitle_mode_text(flow),
+        reply_markup=_subtitle_mode_keyboard(flow),
+    )
+
+
+async def _on_submode_pick(callback: CallbackQuery, bot: Bot, flow: PendingFlow, value: str, lang: str) -> None:
+    if not flow.chosen_subtitle:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+    flow.chosen_mode = settings.normalize_subtitle_mode(value)
+    await _run_download(callback, bot, flow, flow.chosen_format or "")
 
 
 async def _send_thumbnail(callback: CallbackQuery, bot: Bot, flow: PendingFlow, lang: str) -> None:
@@ -391,6 +472,10 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
         playlist=flow.prefix == "pl",
         playlist_items=flow.playlist_items,
     )
+    option = flow.chosen_subtitle
+    if option is not None and flow.prefix != "pl":
+        job.subtitle_langs = option.key
+        job.subtitle_auto = option.kind in ("auto", "translated")
     editor = _ProgressEditor(flow)
 
     try:
@@ -412,8 +497,13 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
             return
         if flow.postprocess is not None:
             await flow.postprocess(parts)
+        srt_path = None
+        if option is not None and flow.chosen_mode:
+            srt_path = await _apply_subtitles(srv, bot, flow, parts, fmt)
         total = sum(p.stat().st_size for p in parts)
-        consumed = await _deliver(srv, bot, flow, parts, fmt, user_id, lang, total)
+        if srt_path is not None and srt_path.exists():
+            total += srt_path.stat().st_size
+        consumed = await _deliver(srv, bot, flow, parts, fmt, user_id, lang, total, srt_path=srt_path)
     finally:
         if consumed:
             _cleanup_pending(flow)
@@ -422,7 +512,16 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
 
 
 async def _deliver(
-    srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str, user_id: int, lang: str, total: int
+    srv,
+    bot: Bot,
+    flow: PendingFlow,
+    parts: list[Path],
+    fmt: str,
+    user_id: int,
+    lang: str,
+    total: int,
+    *,
+    srt_path: Path | None = None,
 ) -> bool:
     """Send as one Telegram message, or hand over a link when too large / failed.
 
@@ -431,15 +530,18 @@ async def _deliver(
     """
     if not settings.fits_upload_limit(total):
         await _send_links(srv, flow, parts, fmt, user_id, lang, total, keep_picker=True)
+        await _send_srt(bot, flow, srt_path, user_id)
         return False
 
     try:
         await _upload_with_retry(srv, bot, flow, parts, fmt, user_id, lang)
+        await _send_srt(bot, flow, srt_path, user_id)
         return True
     except Exception as exc:  # noqa: BLE001
         if _link_would_help(exc) and srv.download_links.enabled:
             log.info("upload failed (%s); delivering a link instead", type(exc).__name__)
             await _send_links(srv, flow, parts, fmt, user_id, lang, total, keep_picker=True)
+            await _send_srt(bot, flow, srt_path, user_id)
             return False
         log.warning("upload failed user_id=%s site=%s: %s", user_id, flow.url_site, exc)
         await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "error", "telegram", total, flow.duration)
@@ -621,7 +723,7 @@ async def _upload_video_flow(srv, bot: Bot, flow: PendingFlow, parts: list[Path]
                 raise
         size = path.stat().st_size
         if len(parts) == 1:
-            await srv.cache.put(flow.url_hash, fmt, sent.video.file_id, flow.title, size)
+            await srv.cache.put(flow.url_hash, _cache_format(flow, fmt), sent.video.file_id, flow.title, size)
         await _record(srv.db, user_id, flow.url, flow.url_site, fmt, "ok", None, size, flow.duration)
         await srv.db.touch_user(user_id)
     await _try_delete(flow.status_message)
@@ -723,11 +825,15 @@ def _supported(raw: str) -> bool:
     return is_supported_scheme(raw)
 
 
-async def _extract(srv, url: str, playlist: bool, tmpdir: Path) -> dict[str, Any] | None:
+async def _extract(srv, url: str, playlist: bool, tmpdir: Path, *, want_subtitles: bool = False) -> dict[str, Any] | None:
     items = "1-10" if playlist else None
     try:
         return await srv.runner.extract_info(
-            url, playlist=playlist, playlist_items=items, cookiejar_dir=tmpdir
+            url,
+            playlist=playlist,
+            playlist_items=items,
+            cookiejar_dir=tmpdir,
+            want_subtitles=want_subtitles,
         )
     except InfoError as exc:
         if srv.updater.should_retry(str(exc)):
@@ -735,7 +841,11 @@ async def _extract(srv, url: str, playlist: bool, tmpdir: Path) -> dict[str, Any
             result = await srv.updater.update()
             if result.ok:
                 return await srv.runner.extract_info(
-                    url, playlist=playlist, playlist_items=items, cookiejar_dir=tmpdir
+                    url,
+                    playlist=playlist,
+                    playlist_items=items,
+                    cookiejar_dir=tmpdir,
+                    want_subtitles=want_subtitles,
                 )
         raise
 
@@ -880,6 +990,205 @@ def _build_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# --------------------------------------------------------------------------
+# Subtitle UI and post-processing
+# --------------------------------------------------------------------------
+
+def _option_label(option: SubtitleOption, lang: str) -> str:
+    if option.kind == "auto":
+        return option.name + text(lang, "subtitle_auto")
+    if option.kind == "translated":
+        return option.name + text(lang, "subtitle_auto_translated")
+    return option.name
+
+
+def _subtitle_text(flow: PendingFlow) -> str:
+    return text(flow.lang, "choose_subtitle", title=sanitize_filename(flow.title) or "?")
+
+
+def _subtitle_keyboard(flow: PendingFlow, page: int) -> InlineKeyboardMarkup:
+    size = max(1, settings.subtitle_page_size)
+    manual = [o for o in flow.subtitle_options if o.kind == "manual"]
+    auto = [o for o in flow.subtitle_options if o.kind != "manual"]
+    pages = max(1, (len(manual) + size - 1) // size)
+    page = min(max(0, page), pages - 1)
+    rows: list[list[InlineKeyboardButton]] = []
+    start = page * size
+    for offset, option in enumerate(manual[start : start + size]):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_option_label(option, flow.lang),
+                    callback_data=f"{flow.prefix}:sub:{start + offset}",
+                )
+            ]
+        )
+    base = len(manual)
+    for offset, option in enumerate(auto):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_option_label(option, flow.lang),
+                    callback_data=f"{flow.prefix}:sub:{base + offset}",
+                )
+            ]
+        )
+    if pages > 1 and page < pages - 1:
+        rows.append(
+            [InlineKeyboardButton(text=text(flow.lang, "button_more"), callback_data=f"{flow.prefix}:sub:more:{page + 1}")]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=text(flow.lang, "button_no_subtitles"), callback_data=f"{flow.prefix}:sub:none"
+            ),
+            InlineKeyboardButton(text=text(flow.lang, "button_cancel"), callback_data=f"{flow.prefix}:cancel"),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _subtitle_mode_text(flow: PendingFlow) -> str:
+    option = flow.chosen_subtitle
+    language = _option_label(option, flow.lang) if option else "?"
+    body = text(flow.lang, "choose_subtitle_mode", language=language)
+    return f"{body}\n\n{text(flow.lang, 'subtitle_mode_hint')}"
+
+
+def _subtitle_mode_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
+    selected = settings.normalize_subtitle_mode(flow.chosen_mode)
+
+    def _label(key: str, mode: str) -> str:
+        mark = "✅ " if mode == selected else ""
+        return mark + text(flow.lang, key)
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=_label("button_mode_burn", subtitles.BURN), callback_data=f"{flow.prefix}:submode:burn"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=_label("button_mode_embed", subtitles.EMBED), callback_data=f"{flow.prefix}:submode:embed"
+            ),
+            InlineKeyboardButton(
+                text=_label("button_mode_srt", subtitles.SRT), callback_data=f"{flow.prefix}:submode:srt"
+            ),
+        ],
+        [InlineKeyboardButton(text=text(flow.lang, "button_cancel"), callback_data=f"{flow.prefix}:cancel")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _stored_subtitle_mode(user_id: int) -> str | None:
+    try:
+        return await get_services().db.get_subtitle_mode(user_id)
+    except Exception:  # noqa: BLE001 - a missing preference just falls back to default
+        log.debug("failed to read subtitle mode", exc_info=True)
+        return None
+
+
+def _cache_format(flow: PendingFlow, fmt: str) -> str:
+    if flow.chosen_subtitle and flow.chosen_mode:
+        return f"{fmt}#sub:{flow.chosen_subtitle.key}:{flow.chosen_mode}"
+    return fmt
+
+
+def _pick_subtitle_file(tmpdir: Path) -> Path | None:
+    files = subtitles.collect_subtitle_files(tmpdir)
+    return files[0] if files else None
+
+
+def _write_clean_srt(src: Path, tmpdir: Path) -> Path | None:
+    try:
+        raw = src.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    cleaned = subtitles.clean_subtitle_text(raw)
+    if not cleaned.strip():
+        return None
+    out = tmpdir / f"{src.stem}.clean.srt"
+    try:
+        out.write_text(cleaned, encoding="utf-8")
+    except OSError:
+        return None
+    return out
+
+
+def _burn_bitrate(target: Path, duration: float) -> int | None:
+    """Target video bitrate when a burn-in would exceed Telegram's limit."""
+    try:
+        size = target.stat().st_size
+    except OSError:
+        return None
+    limit = int(settings.upload_limit_bytes * 0.9)
+    if size <= limit:
+        return None
+    return subtitles.target_bitrate_kbps(duration, limit)
+
+
+async def _apply_subtitles(srv, bot: Bot, flow: PendingFlow, parts: list[Path], fmt: str) -> Path | None:
+    """Burn/embed the downloaded subtitle track, or return an ``.srt`` to send."""
+    option = flow.chosen_subtitle
+    mode = flow.chosen_mode
+    if option is None or not mode or not parts:
+        return None
+    srt = _pick_subtitle_file(flow.tmpdir)
+    if srt is None:
+        await _edit(message=flow.status_message, body=text(flow.lang, "subtitle_failed"))
+        return None
+    cleaned = _write_clean_srt(srt, flow.tmpdir)
+    if cleaned is None:
+        await _edit(message=flow.status_message, body=text(flow.lang, "subtitle_failed"))
+        return None
+
+    # Audio cannot carry a subtitle track; the file itself is the delivery.
+    if mode == subtitles.SRT or not fmt.startswith("video"):
+        return cleaned
+
+    target = parts[0]
+    if mode == subtitles.BURN:
+        if flow.duration and flow.duration > settings.subtitle_burn_max_s:
+            await _edit(
+                message=flow.status_message,
+                body=text(flow.lang, "subtitle_burn_too_long", max=settings.subtitle_burn_max_minutes),
+            )
+        else:
+            editor = _ProgressEditor(flow)
+
+            async def _progress(percent: float) -> None:
+                await editor.update(percent, 0, 0)
+
+            ok = await subtitles.burn_subtitles(
+                target,
+                cleaned,
+                settings,
+                duration_s=flow.duration,
+                bitrate_kbps=_burn_bitrate(target, flow.duration),
+                on_progress=_progress,
+            )
+            if ok:
+                return None
+            await _edit(message=flow.status_message, body=text(flow.lang, "subtitle_failed"))
+            return cleaned
+
+    if await subtitles.embed_subtitles(target, cleaned, language=option.code):
+        return None
+    return cleaned
+
+
+async def _send_srt(bot: Bot, flow: PendingFlow, srt_path: Path | None, user_id: int) -> None:
+    if srt_path is None or not srt_path.exists():
+        return
+    chat_id = flow.status_message.chat.id if flow.status_message else user_id
+    name = f"{sanitize_filename(flow.title) or 'subtitles'}.srt"
+    try:
+        await bot.send_document(chat_id, FSInputFile(srt_path, filename=name), caption=flow.title or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("subtitle document upload failed user_id=%s: %s", user_id, exc)
 
 
 class _ProgressEditor:

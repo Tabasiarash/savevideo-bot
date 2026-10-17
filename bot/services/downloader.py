@@ -27,6 +27,23 @@ from urllib.parse import urlsplit
 from bot.config import Settings
 
 log = logging.getLogger(__name__)
+_PROXY_FAIL_HINTS = (
+    "failed to connect to",
+    "could not connect to server",
+    "connection refused",
+    "errno 111",
+    "connection error",
+    "sockshttpsconnection",
+    "proxy error",
+    "connect() timed out",
+    "timed out while connecting",
+)
+
+
+def _is_proxy_failure(err: str) -> bool:
+    e = err.lower()
+    return any(h in e for h in _PROXY_FAIL_HINTS)
+
 
 _PROGRESS_RE = re.compile(r"\[download\]\s+([\d.]+)%")
 
@@ -76,6 +93,8 @@ class DownloadJob:
     playlist: bool = False
     playlist_items: str | None = None
     title_hint: str | None = None
+    subtitle_langs: str | None = None  # comma-separated yt-dlp --sub-langs keys
+    subtitle_auto: bool = False  # picked key is an automatic/translated track
 
 
 @dataclass
@@ -219,8 +238,59 @@ class YtDlpRunner:
         cookiejar_dir: Path | None = None,
         proxy: str | None = None,
         flat: bool = False,
+        tried_no_proxy: bool = False,
+        want_subtitles: bool = False,
+    ) -> dict[str, Any]:
+        """Extract metadata, falling back to a subtitle-free run on failure.
+
+        ``--write-auto-subs`` is the only way for ``yt-dlp -J --skip-download``
+        to populate ``automatic_captions``, but it occasionally makes an
+        otherwise-fine extraction fail. The retry keeps metadata flowing even
+        when subtitles cannot be enumerated.
+        """
+        try:
+            return await self._extract_info_once(
+                url,
+                playlist=playlist,
+                playlist_items=playlist_items,
+                cookiejar_dir=cookiejar_dir,
+                proxy=proxy,
+                flat=flat,
+                tried_no_proxy=tried_no_proxy,
+                want_subtitles=want_subtitles,
+            )
+        except InfoError:
+            if not want_subtitles:
+                raise
+            log.warning("extract_info with subtitles failed, retrying without", exc_info=True)
+            return await self._extract_info_once(
+                url,
+                playlist=playlist,
+                playlist_items=playlist_items,
+                cookiejar_dir=cookiejar_dir,
+                proxy=proxy,
+                flat=flat,
+                tried_no_proxy=tried_no_proxy,
+                want_subtitles=False,
+            )
+
+    async def _extract_info_once(
+        self,
+        url: str,
+        *,
+        playlist: bool = False,
+        playlist_items: str | None = None,
+        cookiejar_dir: Path | None = None,
+        proxy: str | None = None,
+        flat: bool = False,
+        tried_no_proxy: bool = False,
+        want_subtitles: bool = False,
     ) -> dict[str, Any]:
         """Extract metadata as a dict (``yt-dlp -J``). Raises :class:`InfoError`."""
+        if tried_no_proxy:
+            used_proxy = ""  # explicit direct: bypass the platform proxy
+        else:
+            used_proxy = proxy if proxy is not None else _platform_proxy(self.settings, url)
         args = [
             sys.executable,
             "-m",
@@ -232,11 +302,16 @@ class YtDlpRunner:
                 playlist_items=playlist_items,
                 url=url,
                 cookiejar_dir=cookiejar_dir,
-                proxy=proxy,
+                proxy=used_proxy,
                 flat=flat,
             ),
-            url,
         ]
+        if want_subtitles:
+            # Populates info["automatic_captions"]; without this the field is
+            # empty for "yt-dlp -J --skip-download".
+            args.append("--write-auto-subs")
+        args.append(url)
+        started = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
@@ -246,15 +321,34 @@ class YtDlpRunner:
             proc.kill()
             await proc.wait()
             raise InfoError("info extraction timed out") from exc
+        log.info(
+            "extract_info %s took %.2fs (subtitles=%s)",
+            _url_host(url) or url,
+            time.monotonic() - started,
+            want_subtitles,
+        )
         if proc.returncode != 0:
             msg = err.decode("utf-8", "replace").strip() or "unknown error"
-            raise InfoError(msg[-500:])
+            if used_proxy and not tried_no_proxy and _is_proxy_failure(msg):
+                host = _url_host(url)
+                log.warning("proxy unreachable, retrying without proxy for %s", host or "unknown")
+                return await self._extract_info_once(
+                    url,
+                    playlist=playlist,
+                    playlist_items=playlist_items,
+                    cookiejar_dir=cookiejar_dir,
+                    proxy=None,
+                    flat=flat,
+                    tried_no_proxy=True,
+                    want_subtitles=want_subtitles,
+                )
+            raise InfoError(msg)
         import json
 
         try:
-            return json.loads(out.decode("utf-8", "replace"))
-        except json.JSONDecodeError as exc:
-            raise InfoError("invalid metadata from extractor") from exc
+            return json.loads(out)
+        except ValueError as exc:
+            raise InfoError("invalid JSON from yt-dlp") from exc
 
     async def _run_and_read_progress(
         self,
@@ -313,12 +407,14 @@ class YtDlpRunner:
         on_progress: ProgressCallback | None = None,
         start_callback: VoidCallback | None = None,
         write_thumbnail: bool = False,
+        tried_no_proxy: bool = False,
     ) -> list[Path]:
         """Run a download job inside ``job.tmpdir``; returns produced media files."""
         safe = job.title_hint or "media"
         base = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", safe)[:120] or "media"
         outtmpl = str(job.tmpdir / f"{base}.%(ext)s")
 
+        used_proxy = "" if tried_no_proxy else _platform_proxy(self.settings, job.url)
         args = [
             sys.executable,
             "-m",
@@ -328,6 +424,7 @@ class YtDlpRunner:
                 playlist_items=job.playlist_items,
                 url=job.url,
                 cookiejar_dir=job.tmpdir,
+                proxy=used_proxy,
             ),
             "-o",
             outtmpl,
@@ -340,19 +437,43 @@ class YtDlpRunner:
         args += self._format_args(job.format_key, job.height, job.audio_codec)
         if write_thumbnail:
             args += ["--write-thumbnail", "--convert-thumbnails", "jpg"]
+        if job.subtitle_langs and not job.format_key.startswith("audio"):
+            args += [
+                "--write-subs",
+                "--sub-langs",
+                job.subtitle_langs,
+                "--convert-subs",
+                "srt",
+            ]
+            if job.subtitle_auto:
+                args.append("--write-auto-subs")
         args.append(job.url)
 
         if job.format_key.startswith("audio"):
             args += ["-x"]
 
-        async with self._yt_sem:
-            await self._run_and_read_progress(
-                args,
-                on_progress=on_progress,
-                timeout=self.settings.download_timeout,
-                start_callback=start_callback,
-            )
-        return _collect_media_files(job.tmpdir)
+        try:
+            async with self._yt_sem:
+                await self._run_and_read_progress(
+                    args,
+                    on_progress=on_progress,
+                    timeout=self.settings.download_timeout,
+                    start_callback=start_callback,
+                )
+            return _collect_media_files(job.tmpdir)
+        except Exception as exc:
+            errtxt = str(exc)
+            if used_proxy and not tried_no_proxy and _is_proxy_failure(errtxt):
+                host = _url_host(job.url)
+                log.warning("proxy unreachable, retrying without proxy for %s", host or "unknown")
+                return await self.download(
+                    job,
+                    on_progress=on_progress,
+                    start_callback=start_callback,
+                    write_thumbnail=write_thumbnail,
+                    tried_no_proxy=True,
+                )
+            raise
 
     @staticmethod
     def _format_args(
@@ -700,7 +821,11 @@ def _parse_size(number: str, unit: str) -> int:
 
 
 def _collect_media_files(tmpdir: Path) -> list[Path]:
-    excluded_suffixes = {".part", ".ytdl", ".json", ".info.json", ".jpg", ".jpeg", ".png", ".webp"}
+    excluded_suffixes = {
+        ".part", ".ytdl", ".json", ".info.json", ".jpg", ".jpeg", ".png", ".webp",
+        # Subtitle tracks are never media; they are handled separately.
+        ".srt", ".vtt", ".ass", ".ssa", ".ttml", ".json3",
+    }
     files = [p for p in tmpdir.iterdir() if p.is_file()]
     media = [
         p

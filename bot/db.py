@@ -139,6 +139,10 @@ MIGRATIONS: dict[int, list[str]] = {
         )
         """,
     ],
+    5: [
+        # Per-user preferred subtitle delivery mode (burn / embed / srt).
+        "ALTER TABLE users ADD COLUMN subtitle_mode TEXT",
+    ],
 }
 
 
@@ -229,6 +233,13 @@ class Database:
 
     async def set_language(self, user_id: int, language: str) -> None:
         await self._execute("UPDATE users SET language = ? WHERE id = ?", (language, user_id))
+
+    async def get_subtitle_mode(self, user_id: int) -> str | None:
+        row = await self.get_user(user_id)
+        return row["subtitle_mode"] if row else None
+
+    async def set_subtitle_mode(self, user_id: int, mode: str) -> None:
+        await self._execute("UPDATE users SET subtitle_mode = ? WHERE id = ?", (mode, user_id))
 
     async def is_banned(self, user_id: int) -> bool:
         row = await self.get_user(user_id)

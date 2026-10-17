@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from bot.services.podcast import feed, itunes, resolver
-from bot.services.podcast.meta import EpisodeMeta
+from bot.services.podcast.meta import EpisodeMeta, from_embed_page, plausible_show
 from bot.services.podcast.scoring import duration_score, duration_tolerance, score_candidate
 from bot.services.spotify import matcher
 from bot.services.spotify.http import HttpResponse
@@ -96,6 +98,71 @@ def test_score_supports_cjk():
         tol_pct=0.03,
     )
     assert score > 0.9
+
+
+# --------------------------------------------------------------------------
+# show-name sanitising
+# --------------------------------------------------------------------------
+
+
+def test_plausible_show_accepts_real_names():
+    assert plausible_show("صدای ایده ها")
+    assert plausible_show("The Daily")
+    assert plausible_show("۳۶۰ درجه")
+
+
+def test_plausible_show_rejects_empty_and_disclaimers():
+    assert not plausible_show(None)
+    assert not plausible_show("")
+    assert not plausible_show("   ")
+    # A distribution/copyright sentence used to leak into the ``subtitle`` field.
+    assert not plausible_show("این مجموعه صرفاً با هدف ارائه متن کتاب بهصورت صوتی")
+    assert not plausible_show("متن کتاب در چارچوب مطالعه")
+    # Sentence-shaped values (spaces + question mark or semicolon) are rejected.
+    assert not plausible_show("یک عنوان بسیار طولانی که شبیه جمله است و با علامت سوال تمام میشود؟")
+    # Absurdly long values are not show names.
+    assert not plausible_show("x" * 200)
+
+
+def _embed_html(subtitle: str, duration_ms: int) -> str:
+    blob = {
+        "props": {
+            "pageProps": {
+                "state": {"data": {"entity": {"subtitle": subtitle, "duration": duration_ms}}}
+            }
+        }
+    }
+    return f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(blob)}</script>'
+
+
+def test_from_embed_page_drops_disclaimer_subtitle():
+    from bot.services.spotify.urls import SpotifyRef
+
+    ref = SpotifyRef("episode", "7LJGaCDBznerKykKNZPdMo", "https://open.spotify.com/episode/7LJGaCDBznerKykKNZPdMo")
+    html = _embed_html("این مجموعه صرفاً با هدف ارائه متن کتاب بهصورت صوتی", 1528110)
+    meta = from_embed_page(html, ref)
+    assert meta.show is None
+    assert meta.duration_s == 1528.11
+
+
+def test_from_embed_page_keeps_real_show():
+    from bot.services.spotify.urls import SpotifyRef
+
+    ref = SpotifyRef("episode", "abc", "https://open.spotify.com/episode/abc")
+    meta = from_embed_page(_embed_html("The Daily", 1800000), ref)
+    assert meta.show == "The Daily"
+    assert meta.duration_s == 1800.0
+
+
+def test_music_handler_query_drops_implausible_show():
+    meta = EpisodeMeta(
+        spotify_id="x",
+        title="معدن هوشمند؛ آیندهای بدون انسان؟",
+        show="این مجموعه صرفاً با هدف ارائه متن کتاب بهصورت صوتی",
+    )
+    query = resolver.music_handler_query(meta)
+    assert "صرفاً با هدف" not in query
+    assert query == "معدن هوشمند؛ آیندهای بدون انسان؟"
 
 
 # --------------------------------------------------------------------------

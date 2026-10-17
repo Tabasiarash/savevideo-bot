@@ -81,6 +81,24 @@ async def test_handle_urls_duration_too_long(services, runner, make_message):
     assert USER not in links._pending
 
 
+async def test_handle_urls_duration_over_cap_blocks_non_admin(services, settings, runner, make_message):
+    runner.info["duration"] = 101 * 60
+    msg = make_message(user_id=USER)
+    await links.handle_urls(msg, ["https://www.youtube.com/watch?v=abc123"], playlist=False)
+    assert "exceeds" in " ".join(msg.edits)
+    assert USER not in links._pending
+
+
+async def test_handle_urls_duration_over_cap_allows_admin(services, settings, runner, make_message):
+    admin = settings.admin_ids[0]
+    runner.info["duration"] = 101 * 60
+    msg = make_message(user_id=admin)
+    await links.handle_urls(msg, ["https://www.youtube.com/watch?v=abc123"], playlist=False)
+    assert "exceeds" not in " ".join(msg.edits)
+    assert admin in links._pending
+    assert any("Pick" in body for body in msg.edits)
+
+
 async def test_handle_urls_info_error(services, runner, make_message):
     runner.info_error = InfoError("extractor exploded")
     msg = make_message()
@@ -366,7 +384,7 @@ async def test_deeplink_valid_starts_flow(services, runner, bot, make_message):
 async def test_extract_retries_after_ytdlp_update(services, runner, monkeypatch, tmp_path):
     calls = {"n": 0}
 
-    async def fake_extract(url, *, playlist=False, playlist_items=None, cookiejar_dir=None):
+    async def fake_extract(url, *, playlist=False, playlist_items=None, cookiejar_dir=None, want_subtitles=False):
         calls["n"] += 1
         if calls["n"] == 1:
             raise InfoError("extractor broke")
@@ -383,3 +401,132 @@ async def test_extract_retries_after_ytdlp_update(services, runner, monkeypatch,
 @pytest.mark.parametrize("fmt,expected", [("video_720", 720), ("video_best", None), ("audio_mp3", None)])
 def test_height_of(fmt, expected):
     assert links._height_of(fmt) == expected
+
+
+# --- subtitles -------------------------------------------------------------
+
+
+def _with_captions(runner):
+    runner.info["language"] = "en"
+    runner.info["subtitles"] = {"en": [{"ext": "vtt"}], "de": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}], "fa-en": [{}]}
+
+
+async def test_subtitle_prompt_and_caption_pruning(services, runner, bot, make_message, make_callback, settings, monkeypatch):
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    runner.info["subtitles"] = {"en": [{}], "de": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}], "fa-en": [{}]}
+    msg = make_message()
+    flow = await _open_flow(services, msg, runner)
+    assert runner.want_subtitles_calls == [True]
+    # The bulky caption maps must not be retained on the flow.
+    assert "automatic_captions" not in flow.info
+    assert "subtitles" not in flow.info
+
+    cb = make_callback(data="dl:video_720", message=msg)
+    await links.on_format_pick(cb, services.bot)
+    assert flow.chosen_format == "video_720"
+    assert any("subtitles" in e.lower() for e in msg.edits)
+    assert len(services.bot.videos) == 0
+
+
+async def test_subtitle_none_downloads_without_subtitles(
+    services, runner, bot, make_message, make_callback, settings, monkeypatch
+):
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    runner.info["subtitles"] = {"en": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}]}
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    cb = make_callback(data="dl:video_720", message=msg)
+    await links.on_format_pick(cb, bot)
+    cb2 = make_callback(data="dl:sub:none", message=msg)
+    await links.on_format_pick(cb2, bot)
+    assert len(bot.videos) == 1
+    assert runner.calls[-1].subtitle_langs is None
+
+
+async def test_subtitle_srt_mode_sends_document(
+    services, runner, bot, make_message, make_callback, settings, monkeypatch
+):
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    runner.info["subtitles"] = {"en": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}]}
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    await links.on_format_pick(make_callback(data="dl:video_720", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:sub:0", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:submode:srt", message=msg), bot)
+    assert len(bot.videos) == 1
+    assert len(bot.documents) == 1
+    assert runner.calls[-1].subtitle_langs == "en"
+
+
+async def test_subtitle_burn_mode_invokes_burn(
+    services, runner, bot, make_message, make_callback, settings, monkeypatch
+):
+    from bot.services import subtitles
+
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    runner.info["subtitles"] = {"en": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}]}
+    burned: list[tuple] = []
+
+    async def fake_burn(video, srt, settings_, **kwargs):
+        burned.append((video, srt, kwargs))
+        return True
+
+    monkeypatch.setattr(subtitles, "burn_subtitles", fake_burn)
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    await links.on_format_pick(make_callback(data="dl:video_720", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:sub:0", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:submode:burn", message=msg), bot)
+    assert len(burned) == 1
+    assert burned[0][1].suffix == ".srt"
+    assert len(bot.videos) == 1
+    assert not bot.documents
+
+
+async def test_subtitle_burn_falls_back_to_embed_when_too_long(
+    services, runner, bot, make_message, make_callback, settings, monkeypatch
+):
+    from bot.services import subtitles
+
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    monkeypatch.setattr(settings, "subtitle_burn_max_minutes", 1, raising=False)
+    runner.info["duration"] = 600
+    runner.info["subtitles"] = {"en": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}]}
+    embedded: list[tuple] = []
+    burn_called = {"n": 0}
+
+    async def fake_burn(video, srt, settings_, **kwargs):
+        burn_called["n"] += 1
+        return True
+
+    async def fake_embed(video, srt, **kwargs):
+        embedded.append((video, srt))
+        return True
+
+    monkeypatch.setattr(subtitles, "burn_subtitles", fake_burn)
+    monkeypatch.setattr(subtitles, "embed_subtitles", fake_embed)
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    await links.on_format_pick(make_callback(data="dl:video_720", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:sub:0", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:submode:burn", message=msg), bot)
+    assert burn_called["n"] == 0
+    assert len(embedded) == 1
+    assert any("longer than" in e for e in msg.edits)
+
+
+async def test_subtitles_not_offered_without_captions(
+    services, runner, bot, make_message, make_callback, settings, monkeypatch
+):
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    assert runner.want_subtitles_calls == [True]
+    await links.on_format_pick(make_callback(data="dl:video_720", message=msg), bot)
+    assert len(bot.videos) == 1

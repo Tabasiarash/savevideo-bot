@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass
 
 from bot.services.spotify.http import fetch
 
+from .meta import plausible_show
 from .scoring import score_candidate
 
 log = logging.getLogger(__name__)
@@ -101,9 +102,14 @@ async def _search_region(
     proxy: str | None,
     settings,
 ) -> list[ItunesEpisode]:
-    term = " ".join(part for part in (meta.show, meta.title) if part).strip()
+    term = None
+    if plausible_show(meta.show) and meta.title:
+        term = f"{meta.show} {meta.title}"
+    if not term and meta.title:
+        term = meta.title
     if not term:
         return []
+    term = " ".join(term.split()).strip()
 
     url = (
         f"{_SEARCH_URL}?media=podcast&entity=podcastEpisode"

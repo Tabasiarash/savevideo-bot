@@ -23,6 +23,7 @@ from bot.services.spotify.matcher import Candidate
 
 from .feed import list_enclosures
 from .itunes import ItunesEpisode, search_episode
+from .meta import plausible_show
 from .scoring import score_candidate
 
 log = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ async def find_fallback_match(
     music matcher's, and is held to the stricter exclusive threshold by the
     caller.
     """
-    if not meta.is_usable():
+    if not meta or not meta.is_usable():
         return None, []
 
     skip = exclude or set()
@@ -195,9 +196,11 @@ async def find_fallback_match(
 
 
 def music_handler_query(meta) -> str:
-    show = meta.show or ""
+    show = meta.show if plausible_show(meta.show) else ""
     title = meta.title or ""
     query = f"{show} {title}".strip() or title
+    if not query:
+        query = title
     return " ".join(query.split())[:200]
 
 
@@ -231,7 +234,9 @@ async def resolve_episode_audio(
             return resolved
 
     # 2. RSS enclosures — from the best candidate's feed, or the show's feed.
-    feed_url = next((c.feed_url for c in candidates if c.feed_url), None) or meta.feed_url
+    feed_url = next((c.feed_url for c in candidates if c.feed_url), None)
+    if meta and not feed_url:
+        feed_url = meta.feed_url
     if feed_url:
         resolved = None
         with contextlib.suppress(Exception):

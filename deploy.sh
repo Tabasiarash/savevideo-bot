@@ -35,6 +35,15 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
     apt-get update -qq && apt-get install -y -qq ffmpeg
 fi
 
+# Fonts used to burn subtitles into video (Farsi/Arabic need Noto).
+if command -v apt-get >/dev/null 2>&1; then
+    dpkg -s fonts-noto-core >/dev/null 2>&1 || {
+        warn "installing Noto fonts for burned-in subtitles"
+        apt-get update -qq && apt-get install -y -qq fonts-noto-core fonts-noto-extra || \
+            warn "could not install Noto fonts — burned-in subtitles may miss glyphs"
+    }
+fi
+
 # --- service account -------------------------------------------------------
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     log "creating system user '$SERVICE_USER'"

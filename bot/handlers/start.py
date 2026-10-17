@@ -7,8 +7,9 @@ import time
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from bot.config import SUBTITLE_MODES, settings
 from bot.deps import get_services
 from bot.handlers.common import register_user, text
 from bot.i18n import LANGUAGE_NAMES, get_text
@@ -17,11 +18,26 @@ router = Router()
 
 
 def language_keyboard(lang: str) -> InlineKeyboardMarkup:
-    from aiogram.types import InlineKeyboardButton
-
     rows = [
         [InlineKeyboardButton(text=LANGUAGE_NAMES[code], callback_data=f"lang:{code}")]
         for code in ("en", "de", "fa")
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _mode_label(lang: str, mode: str) -> str:
+    return text(lang, f"button_mode_{settings.normalize_subtitle_mode(mode)}")
+
+
+def settings_keyboard(lang: str, selected: str) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=("✅ " if code == selected else "") + text(lang, f"button_mode_{code}"),
+                callback_data=f"setsub:{code}",
+            )
+        ]
+        for code in SUBTITLE_MODES
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -66,6 +82,43 @@ async def cmd_language(message: Message) -> None:
     srv = get_services()
     lang = await register_user(srv.db, message)
     await message.answer(text(lang, "choose_language"), reply_markup=language_keyboard(lang))
+
+
+@router.message(Command("settings"))
+async def cmd_settings(message: Message) -> None:
+    srv = get_services()
+    lang = await register_user(srv.db, message)
+    user = message.from_user
+    if user is None:
+        return
+    if not settings.enable_subtitles:
+        await message.answer(text(lang, "unknown_command"))
+        return
+    mode = settings.normalize_subtitle_mode(await srv.db.get_subtitle_mode(user.id))
+    await message.answer(
+        text(lang, "settings_title", mode=_mode_label(lang, mode)),
+        reply_markup=settings_keyboard(lang, mode),
+    )
+
+
+@router.callback_query(F.data.startswith("setsub:"))
+async def on_subtitle_mode_pick(callback: CallbackQuery) -> None:
+    code = callback.data.split(":", 1)[1]
+    if code not in SUBTITLE_MODES:
+        await callback.answer()
+        return
+    srv = get_services()
+    user_id = callback.from_user.id
+    await srv.db.upsert_user(user_id, getattr(callback.from_user, "username", None), int(time.time()))
+    lang = await srv.db.get_language(user_id) or settings.default_language
+    await srv.db.set_subtitle_mode(user_id, code)
+    selected = settings.normalize_subtitle_mode(code)
+    await callback.answer(text(lang, "settings_saved", mode=_mode_label(lang, selected)))
+    with contextlib.suppress(Exception):
+        await callback.message.edit_text(
+            text(lang, "settings_title", mode=_mode_label(lang, selected)),
+            reply_markup=settings_keyboard(lang, selected),
+        )
 
 
 @router.callback_query(F.data.startswith("lang:"))

@@ -20,6 +20,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Telegram's local Bot API server refuses uploads larger than 2000 MB.
 UPLOAD_CEILING_MB = 2000
 
+# Subtitle delivery modes. "burn" is the only one visible inside Telegram.
+SUBTITLE_MODES = ("burn", "embed", "srt")
+
 
 def _field_validator_helper(raw: object) -> list[int]:
     if isinstance(raw, (list, tuple)):
@@ -171,6 +174,27 @@ class Settings(BaseSettings):
     # Optional proxy for podcast HTTP (metadata + enclosure), no cookies.
     proxy_url_podcast: str = ""
 
+    # --- Subtitles (embedded/burned into downloaded videos; ON by default) ----
+    # Master kill switch. When off, no subtitle step is offered and downloads
+    # behave exactly as before.
+    enable_subtitles: bool = True
+    # Re-encoding to burn in subtitles is expensive: videos longer than this many
+    # minutes fall back to an embedded soft track instead.
+    subtitle_burn_max_minutes: int = 15
+    # Manual subtitle tracks shown per keyboard page (extra ones go behind
+    # "More…"). The two auto options are always shown on every page.
+    subtitle_page_size: int = 6
+    # Default delivery mode, changeable per user with /settings.
+    # One of: "burn" (default), "embed", "srt".
+    subtitle_default_mode: str = "burn"
+    # libass styling for burned-in subtitles (Farsi/Arabic need the Noto fonts).
+    subtitle_font: str = "Noto Sans"
+    subtitle_font_size: int = 20
+    subtitle_outline: int = 2
+    subtitle_margin_v: int = 24
+    # x264 threads for the burn-in encode (kept modest so the queue stays fair).
+    subtitle_threads: int = 2
+
     # --- Storage ---
     db_path: str = "data/savevideo.db"
     temp_dir: str = "tmp"
@@ -219,6 +243,12 @@ class Settings(BaseSettings):
     def blank_int_to_zero(cls, raw: object) -> object:
         return 0 if raw in ("", None) else raw
 
+    @field_validator("subtitle_default_mode", mode="before")
+    @classmethod
+    def normalise_subtitle_mode(cls, raw: object) -> str:
+        mode = str(raw or "").strip().lower()
+        return mode if mode in SUBTITLE_MODES else "burn"
+
     @model_validator(mode="after")
     def resolve_derived(self) -> Settings:
         # Legacy LOCAL_API/LOCAL_API_BASE still select the local server.
@@ -236,6 +266,15 @@ class Settings(BaseSettings):
     @property
     def max_duration_s(self) -> int:
         return self.max_duration_min * 60
+
+    @property
+    def subtitle_burn_max_s(self) -> int:
+        return max(1, self.subtitle_burn_max_minutes) * 60
+
+    def normalize_subtitle_mode(self, mode: str | None) -> str:
+        """Normalise a stored/requested subtitle mode to one of SUBTITLE_MODES."""
+        candidate = (mode or "").strip().lower()
+        return candidate if candidate in SUBTITLE_MODES else self.subtitle_default_mode
 
     @property
     def max_mb(self) -> int:

@@ -34,7 +34,9 @@ async def test_set_commands_public_and_per_admin(monkeypatch):
     assert len(calls) == 3  # default plus one per admin
     default_cmds, default_scope = calls[0]
     assert default_scope is None
-    assert [c.command for c in default_cmds] == ["start", "help", "language"]
+    assert [c.command for c in default_cmds[:3]] == ["start", "help", "language"]
+    if main_mod.settings.enable_subtitles:
+        assert "settings" in [c.command for c in default_cmds]
 
     admin_cmds, admin_scope = calls[1]
     names = [c.command for c in admin_cmds]

@@ -90,6 +90,10 @@ PUBLIC_COMMANDS = [
     types.BotCommand(command="help", description="How to use the bot"),
     types.BotCommand(command="language", description="Change language"),
 ]
+if settings.enable_subtitles:
+    PUBLIC_COMMANDS.append(
+        types.BotCommand(command="settings", description="Subtitle delivery mode")
+    )
 
 ADMIN_COMMANDS = [
     types.BotCommand(command="stats", description="Usage statistics"),

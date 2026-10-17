@@ -582,3 +582,162 @@ def test_sweep_temp_dir_keeps_within_root(tmp_path):
 
 def test_sweep_temp_dir_missing_dir(tmp_path):
     assert dl.sweep_temp_dir(tmp_path / "nope").removed == 0
+
+
+def test_is_proxy_failure_detects_connection_errors():
+    assert dl._is_proxy_failure(
+        "curl: (7) Failed to connect to www.instagram.com:443 over proxy 127.0.0.1:1090"
+    )
+    assert dl._is_proxy_failure("Connection refused")
+    assert dl._is_proxy_failure("SocksHTTPSConnection(host='x', port=443): Failed to establish")
+    assert dl._is_proxy_failure("Proxy error: cannot connect")
+    # Non-connectivity failures must not trigger a proxy fallback.
+    assert not dl._is_proxy_failure("Sign in to confirm you're not a bot")
+    assert not dl._is_proxy_failure("HTTP Error 403: Forbidden")
+    assert not dl._is_proxy_failure("Unsupported URL: https://x/1")
+    assert not dl._is_proxy_failure("No video formats found")
+
+
+async def test_extract_info_falls_back_to_direct_on_proxy_failure(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_exec(*args, **kwargs):
+        calls.append(args)
+        if "--proxy" in args:
+            return _FakeProc(
+                err=b"ERROR: Unable to download webpage: curl: (7) Failed to connect to x "
+                b"over proxy 127.0.0.1:1090",
+                rc=1,
+            )
+        return _FakeProc(out=b'{"id": "ok"}', rc=0)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    runner = YtDlpRunner(_settings(proxy_url="socks5h://127.0.0.1:1090"))
+    info = await runner.extract_info("https://www.instagram.com/reel/x/")
+    assert info == {"id": "ok"}
+    assert len(calls) == 2
+    assert "--proxy" in calls[0]
+    assert "--proxy" not in calls[1]
+
+
+async def test_extract_info_no_fallback_without_proxy(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_exec(*args, **kwargs):
+        calls.append(args)
+        return _FakeProc(err=b"ERROR: Failed to connect to example.com", rc=1)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    runner = YtDlpRunner(_settings())
+    with pytest.raises(dl.InfoError):
+        await runner.extract_info("https://example.com/x")
+    assert len(calls) == 1
+
+
+async def test_extract_info_does_not_retry_proxy_twice(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_exec(*args, **kwargs):
+        calls.append(args)
+        return _FakeProc(err=b"ERROR: Failed to connect to x over proxy 127.0.0.1:1090", rc=1)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    runner = YtDlpRunner(_settings(proxy_url="socks5h://127.0.0.1:1090"))
+    with pytest.raises(dl.InfoError):
+        await runner.extract_info("https://www.instagram.com/reel/x/")
+    # First attempt uses the proxy; the single fallback retries direct, then stops.
+    assert len(calls) == 2
+    assert "--proxy" in calls[0]
+    assert "--proxy" not in calls[1]
+
+
+async def test_download_falls_back_to_direct_on_proxy_failure(monkeypatch, tmp_path):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(args, **kwargs):
+        calls.append(tuple(args))
+        if "--proxy" in args:
+            raise dl.DownloadError("curl: (7) Failed to connect to x over proxy 127.0.0.1:1090")
+
+    runner = YtDlpRunner(_settings(proxy_url="socks5h://127.0.0.1:1090"))
+    monkeypatch.setattr(runner, "_run_and_read_progress", fake_run)
+    job = DownloadJob(url="https://www.instagram.com/reel/x/", format_key="video_720", tmpdir=tmp_path, height=720)
+    await runner.download(job)
+    assert len(calls) == 2
+    assert "--proxy" in calls[0]
+    assert "--proxy" not in calls[1]
+
+
+def test_collect_media_files_excludes_subtitles(tmp_path):
+    (tmp_path / "a.mp4").write_bytes(b"x" * 100)
+    (tmp_path / "a.en.srt").write_bytes(b"1\n")
+    (tmp_path / "a.en.vtt").write_bytes(b"WEBVTT\n")
+    (tmp_path / "a.ass").write_bytes(b"[Script Info]\n")
+    (tmp_path / "a.en.json3").write_bytes(b"{}")
+    assert [p.name for p in _collect_media_files(tmp_path)] == ["a.mp4"]
+
+
+async def test_extract_info_adds_write_auto_subs(monkeypatch):
+    captured: dict[str, tuple] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc(out=b'{"id": "ok"}', rc=0)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    info = await YtDlpRunner(_settings()).extract_info("https://youtu.be/x", want_subtitles=True)
+    assert info == {"id": "ok"}
+    assert "--write-auto-subs" in captured["args"]
+
+
+async def test_extract_info_omits_subs_flag_by_default(monkeypatch):
+    captured: dict[str, tuple] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc(out=b'{"id": "ok"}', rc=0)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    await YtDlpRunner(_settings()).extract_info("https://youtu.be/x")
+    assert "--write-auto-subs" not in captured["args"]
+
+
+async def test_extract_info_retries_without_subs_on_failure(monkeypatch):
+    calls: list[tuple] = []
+
+    async def fake_exec(*args, **kwargs):
+        calls.append(args)
+        if "--write-auto-subs" in args:
+            return _FakeProc(err=b"ERROR: boom", rc=1)
+        return _FakeProc(out=b'{"id": "ok"}', rc=0)
+
+    monkeypatch.setattr(dl.asyncio, "create_subprocess_exec", fake_exec)
+    info = await YtDlpRunner(_settings()).extract_info("https://youtu.be/x", want_subtitles=True)
+    assert info == {"id": "ok"}
+    assert len(calls) == 2
+    assert "--write-auto-subs" in calls[0]
+    assert "--write-auto-subs" not in calls[1]
+
+
+async def test_download_requests_subtitle_langs(monkeypatch, tmp_path):
+    captured: dict[str, tuple] = {}
+
+    async def fake_run(args, **kwargs):
+        captured["args"] = tuple(args)
+
+    runner = YtDlpRunner(_settings())
+    monkeypatch.setattr(runner, "_run_and_read_progress", fake_run)
+    job = DownloadJob(
+        url="https://youtu.be/x",
+        format_key="video_720",
+        tmpdir=tmp_path,
+        height=720,
+        subtitle_langs="fa-en",
+        subtitle_auto=True,
+    )
+    await runner.download(job)
+    args = captured["args"]
+    assert "--write-subs" in args
+    assert "--write-auto-subs" in args
+    assert captured["args"][captured["args"].index("--sub-langs") + 1] == "fa-en"
+    assert "--convert-subs" in args

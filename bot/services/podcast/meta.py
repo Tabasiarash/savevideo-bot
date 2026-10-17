@@ -32,6 +32,26 @@ _NEXT_DATA_RE = re.compile(
     re.S,
 )
 
+# Some Spotify embed pages put a copyright/description sentence in the
+# ``subtitle`` field instead of the show name (e.g. a distribution disclaimer).
+# Using it as the show name pollutes search queries and dilutes match scoring,
+# so such values are treated as missing.
+_SHOW_DESC_MARKERS = ("صرفاً با هدف", "با هدف ارائه", "متن کتاب", "در چارچوب مطالعه")
+_MAX_SHOW_LEN = 90
+_MAX_SHOW_WORDS = 12
+
+
+def plausible_show(value: str | None) -> bool:
+    """True when ``value`` looks like a real show name, not a description."""
+    if not value:
+        return False
+    v = str(value).strip()
+    if not v or len(v) > _MAX_SHOW_LEN:
+        return False
+    if any(marker in v for marker in _SHOW_DESC_MARKERS):
+        return False
+    return not (("  " in v or len(v.split()) > _MAX_SHOW_WORDS) and (v.endswith(("؟", "?")) or "؛" in v))
+
 
 @dataclass
 class EpisodeMeta:
@@ -100,7 +120,7 @@ def from_embed_page(html: str, ref: SpotifyRef) -> EpisodeMeta:
         return meta
 
     subtitle = entity.get("subtitle")
-    if isinstance(subtitle, str) and subtitle.strip():
+    if isinstance(subtitle, str) and plausible_show(subtitle):
         meta.show = subtitle.strip()
 
     duration_ms = entity.get("duration")
@@ -119,8 +139,8 @@ def from_embed_page(html: str, ref: SpotifyRef) -> EpisodeMeta:
 def _merge(base: EpisodeMeta, extra: EpisodeMeta) -> EpisodeMeta:
     if not base.title and extra.title:
         base.title = extra.title
-    if not base.show and extra.show:
-        base.show = extra.show
+    if not base.show and extra.show and plausible_show(extra.show):
+        base.show = str(extra.show).strip()
     if base.duration_s is None and extra.duration_s is not None:
         base.duration_s = extra.duration_s
     if not base.cover_url and extra.cover_url:

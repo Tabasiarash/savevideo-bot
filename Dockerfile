@@ -8,6 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl unzip \
+        fonts-noto-core fonts-noto-extra fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 # Deno: yt-dlp's recommended JS runtime for YouTube's signature/PO-token

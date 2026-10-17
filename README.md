@@ -26,6 +26,9 @@ Spotify itself; see [Spotify](#spotify-metadata-match).
   beforehand.
 - 📦 **Large files**: run a local Bot API server to send up to **2000 MB** as a
   single file (`BOT_API_URL`, see [Large files](#large-files-local-bot-api)).
+- 💬 **Subtitles**: pick a subtitle language (manual or auto/auto-translated) and
+  deliver it **burned in** (visible in Telegram), as an embedded soft track, or
+  as an `.srt` file. Default mode is configurable with `/settings`.
 - ⚡ **Instant cache**: a URL+format → `file_id` cache in SQLite (no re-download
   for repeated links).
 - 🧵 **Concurrency queue** with `MAX_JOBS` workers and per-user queue positions.
@@ -121,7 +124,7 @@ option has a safe default and the bot degrades gracefully.
 | `MAX_JOBS` | `2` | Concurrent downloads. |
 | `PER_USER_DAILY_LIMIT` | `30` | Downloads per user per UTC day. |
 | `COOLDOWN_SECONDS` | `3` | Minimum seconds between requests. |
-| `MAX_DURATION_MIN` | `60` | Reject media longer than this. |
+| `MAX_DURATION_MIN` | `240` | Reject media longer than this (admins bypass). |
 | `INFO_TIMEOUT` | `30` | Metadata extraction timeout (s). |
 | `DOWNLOAD_TIMEOUT` | `600` | Download timeout (s). |
 | `CACHE_TTL_DAYS` | `30` | How long a `file_id` stays cached. |
@@ -250,6 +253,29 @@ wall without cookies.
   plane connects but the QUIC data plane is blocked. Confirm with `/health`.
 - `YTDLP_EXTRA_ARGS` adds extractor knobs without code changes, e.g.
   `--extractor-args "youtube:player_client=web_safari"`.
+
+## Subtitles
+
+When `ENABLE_SUBTITLES=true` (the default), picking a **video** quality first
+shows a subtitle picker: manual tracks listed first, then the original-language
+auto track `(auto)` and, when available, your language's translated track
+` (auto-translated)`. Choosing "🚫 No subtitles" skips straight to download.
+
+After picking a language the bot asks how to deliver it:
+
+- **Burned in** (default) — subtitles are rendered into the picture, the only
+  mode Telegram's player displays. Costs a re-encode (`libx264`), so videos
+  longer than `SUBTITLE_BURN_MAX_MINUTES` (15) automatically fall back to
+  embedding and the user is told.
+- **Embedded track** — a soft `mov_text` track (mp4). Playable in VLC etc., but
+  **not shown by Telegram's player**.
+- **`.srt` file**: the video is sent normally and the subtitle file is sent as a
+  document alongside it.
+
+`/settings` sets each user's default mode (burn / embed / srt). Playlists,
+galleries and audio picks never offer subtitles. The fonts needed for correct
+Farsi/Arabic shaping are installed by `install.sh`/`deploy.sh` (and the
+Dockerfile). Relevant settings live in the `.env.example` "Subtitles" section.
 
 ## SoundCloud and other audio-only sources
 

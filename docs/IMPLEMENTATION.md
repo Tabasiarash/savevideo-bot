@@ -69,13 +69,14 @@ replace an individual service with a fake.
 | Storage | `bot/db.py` | SQLite schema + versioned migrations, all queries (async). |
 | Pure helpers | `bot/utils.py` | URL extraction/normalisation, host/site classification, SSRF checks, formatting. |
 | i18n | `bot/i18n.py` | en/de/fa string tables (key sets asserted equal), fallback chain. |
-| Handlers | `bot/handlers/start.py` | `/start`, `/help`, `/language`, deep-link entry. |
+| Handlers | `bot/handlers/start.py` | `/start`, `/help`, `/language`, `/settings`, deep-link entry. |
 | | `bot/handlers/admin.py` | `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`, `/update_ytdlp`, `/cleanup`, `/health`. |
 | | `bot/handlers/links.py` | Core flow: detect → info → picker → download → upload/cache/link. |
 | | `bot/handlers/spotify.py` | Spotify link detection → metadata → source match → audio picker; podcast-episode lane (both feature-gated). |
 | | `bot/handlers/inline.py` | Inline mode: cached result or deep-link article. |
 | | `bot/handlers/common.py` | Shared: `register_user`, language resolution, `text()`. |
 | Services | `bot/services/downloader.py` | `YtDlpRunner`: yt-dlp args, cookies, proxy, JS runtime, download, probes, format/quality builder. |
+| | `bot/services/subtitles.py` | Subtitle discovery (manual/auto/auto-translated), SRT/VTT cleanup, burn/embed ffmpeg runners. |
 | | `bot/services/download_links.py` | Signed-link store + `secure_link` token formula. |
 | | `bot/services/queue.py` | `JobQueue` (FIFO concurrency limiter). |
 | | `bot/services/ratelimit.py` | Cooldown, daily quota, one-active-job-per-user. |
@@ -150,7 +151,7 @@ lives in [`.env.example`](../.env.example); defaults:
 | `MAX_JOBS` | 2 | Queue concurrency. |
 | `PER_USER_DAILY_LIMIT` | 30 | Successful downloads per UTC day. |
 | `COOLDOWN_SECONDS` | 3 | Between requests. |
-| `MAX_DURATION_MIN` | 60 | Reject longer media. |
+| `MAX_DURATION_MIN` | 240 | Reject longer media (admins bypass). |
 | `YT_MAX_CONCURRENCY` | 2 | Concurrent yt-dlp processes. |
 | `INFO_TIMEOUT` / `DOWNLOAD_TIMEOUT` | 30 / 600 | Seconds. |
 | `UPLOAD_TIMEOUT_SECONDS` | 3600 | Large-file uploads. |
@@ -183,7 +184,7 @@ lives in [`.env.example`](../.env.example); defaults:
 | `SPOTIFY_CLIENT_ID`/`_SECRET` | empty | Optional Web API creds (collections need them). |
 | `SPOTIFY_META_CONCURRENCY` | 4 | Parallel metadata fetches for a collection. |
 | `ENABLE_PODCASTS` | false | Podcast-episode resolution (section 14). |
-| `PODCAST_MATCH_SOURCES` | `youtube,soundcloud` | Last-resort match sources. |
+| `PODCAST_MATCH_SOURCES` | `youtube,soundcloud` | Last-resort match sources. | | `youtube,soundcloud` | Last-resort match sources. |
 | `PODCAST_MIN_SCORE` | 0.65 | Minimum score for a publisher match. |
 | `PODCAST_EXCLUSIVE_MIN_SCORE` | 0.8 | Stricter bar for a last-resort match. |
 | `PODCAST_DURATION_TOL_MIN_S`/`_PCT` | 30 / 0.03 | Percentage-based duration tolerance. |
@@ -192,12 +193,19 @@ lives in [`.env.example`](../.env.example); defaults:
 | `PODCAST_REGIONS` | `us,de` | iTunes storefronts to search, in order. |
 | `PODCAST_MAX_FEED_BYTES`/`_ITEMS` | 10485760 / 200 | Feed size / item caps. |
 | `PODCAST_ITUNES_COOLDOWN_S` | 300 | Cooldown per storefront after a 403/429. |
+| `ENABLE_SUBTITLES` | true | Subtitle picker + mode prompt (section 15). |
+| `SUBTITLE_BURN_MAX_MINUTES` | 15 | Longer videos fall back from burn-in to embed/srt. |
+| `SUBTITLE_DEFAULT_MODE` | `burn` | `burn`/`embed`/`srt`; per-user override via `/settings`. |
+| `SUBTITLE_PAGE_SIZE` | 6 | Manual tracks per keyboard page. |
+| `SUBTITLE_FONT`/`_FONT_SIZE`/`_OUTLINE`/`_MARGIN_V` | Noto Sans / 20 / 2 / 24 | libass burn-in styling. |
+| `SUBTITLE_THREADS` | 2 | x264 threads while burning. |
 
 Derived helpers on `Settings`: `max_duration_s`, `max_mb` (legacy alias),
 `is_local_api`, `upload_limit_bytes`, `fits_upload_limit()`, `cache_ttl_s`,
 `download_link_*`, `min_free_disk_bytes`, `data_dir`, `temp_dir_resolved`,
 `is_admin()`, `spotify_sources()`, `proxy_for_spotify()`,
-`podcast_regions_list()`, `proxy_for_podcast()`, `podcast_max_enclosure_bytes`.
+`podcast_regions_list()`, `proxy_for_podcast()`, `podcast_max_enclosure_bytes`,
+`subtitle_burn_max_s`, `normalize_subtitle_mode()`.
 
 ---
 
@@ -304,6 +312,7 @@ version is recorded in `schema_version`.
 | 2 | `download_links` (signed-link registry) + indexes. |
 | 3 | `spotify_meta` (`spotify_id` PK, `type`, `json`, `fetched_at`) + `idx_spotify_meta_fetched`. |
 | 4 | `podcast_meta`, `podcast_audio`, `podcast_itunes` (episode metadata / resolved audio caches + per-storefront cooldowns). |
+| 5 | `users.subtitle_mode` (per-user default subtitle delivery mode). |
 
 
 - `cache` is keyed `(url_hash, format_key)` → `file_id`; `url_hash = sha256(normalized_url)`.
@@ -509,3 +518,41 @@ date, with cover art, via ffmpeg argument lists.
 **Privacy / data sharing.** An episode's title and show name are sent to Apple's
 iTunes Search API to locate the publisher copy. This is stated in the README and
 `.env.example`.
+
+---
+
+## 15. Subtitles
+
+Feature-gated by `ENABLE_SUBTITLES` (default on). When on, `links.handle_urls`
+extracts metadata with `want_subtitles=True`, which adds `--write-auto-subs` so
+`automatic_captions` is populated; the call is fail-safe (one retry without the
+flag on error/timeout) and the extra flag adds no measurable latency (the first
+`-J` fetch dominates). Right after extraction the two caption maps are pruned
+from `flow.info`; only the chosen `SubtitleOption`s (`key`/`code`/`kind`/`name`)
+are kept.
+
+`bot/services/subtitles.py` holds the pure logic: `detect_source_language`
+(`<lang>-orig` → `info["language"]` → bare key → shared `-<src>` suffix),
+`available_subtitle_options` (manual tracks sorted bot-lang/source/en first, plus
+at most one `(auto)` source entry and one `(auto-translated)` `bot_lang` entry —
+the latter only when the exact `<bot_lang>-<source>` key exists and never when it
+would duplicate the source), and SRT/VTT `clean_subtitle_text` (strips VTT
+tags/cue settings, ASS tags and HTML entities, and de-duplicates the rolling
+lines auto captions repeat).
+
+Flow: picking a **video** quality opens the subtitle keyboard (`sub:none`,
+paginated `sub:<idx>`, `sub:more:<page>`) → a mode prompt (`submode:burn|embed|
+srt`, default marked with a tick, seeded from the stored per-user `/settings`
+preference) → download. Audio, playlists and galleries skip the flow.
+
+Delivery (`links._apply_subtitles`): the downloaded track is normalised to SRT;
+`srt` sends it as a document after the media; `embed` runs ffmpeg `-c copy -c:s
+mov_text` (mp4 only, ISO 639-2 language tag); `burn` re-encodes with
+`libx264 -preset veryfast` (default `-crf 23`, or a target bitrate when the result
+would exceed the upload limit) using `-threads SUBTITLE_THREADS` and libass
+styling. Videos longer than `SUBTITLE_BURN_MAX_MINUTES` fall back to embed.
+ffmpeg runs as a killable argv list with `-progress pipe:1` (never a shell).
+Delivered videos with subtitles use a distinct cache key
+(`fmt#sub:<key>:<mode>`) so a cached plain file is never returned for a
+subtitled request. `/settings` reads/writes `users.subtitle_mode` (migration 5);
+fonts are installed by `install.sh`/`deploy.sh`/the Dockerfile.

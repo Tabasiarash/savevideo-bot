@@ -80,10 +80,15 @@ class FakeRunner:
         self.media_size = 2048
         self.calls: list[object] = []
         self.info_calls: list[str] = []
+        self.want_subtitles_calls: list[bool] = []
         self.thumb_error = False
 
-    async def extract_info(self, url, *, playlist=False, playlist_items=None, cookiejar_dir=None, proxy=None, flat=False):
+    async def extract_info(
+        self, url, *, playlist=False, playlist_items=None, cookiejar_dir=None,
+        proxy=None, flat=False, want_subtitles=False,
+    ):
         self.info_calls.append(url)
+        self.want_subtitles_calls.append(want_subtitles)
         if self.info_error:
             raise self.info_error
         return self.info
@@ -102,6 +107,10 @@ class FakeRunner:
         path.write_bytes(b"\x00" * self.media_size)
         if write_thumbnail:
             (job.tmpdir / "media.jpg").write_bytes(b"\x00" * 128)
+        if getattr(job, "subtitle_langs", None):
+            (job.tmpdir / "media.en.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:02,000\nhello\n", encoding="utf-8"
+            )
         return [path]
 
     async def download_thumbnail(self, job):
@@ -138,6 +147,7 @@ class FakeBot:
     def __init__(self) -> None:
         self.videos: list[tuple] = []
         self.audios: list[tuple] = []
+        self.documents: list[tuple] = []
         self.photos: list[tuple] = []
         self.media_groups: list[tuple] = []
         self.groups: list[object] = []
@@ -165,6 +175,12 @@ class FakeBot:
 
     async def send_photo(self, chat_id, file, **kwargs):
         self.photos.append((chat_id, file, kwargs))
+        return SimpleNamespace(message_id=1)
+
+    async def send_document(self, chat_id, file, **kwargs):
+        if chat_id in self.raise_for:
+            raise RuntimeError("nope")
+        self.documents.append((chat_id, file, kwargs))
         return SimpleNamespace(message_id=1)
 
     async def send_media_group(self, chat_id, media, **kwargs):
@@ -227,6 +243,7 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setattr(real_settings, "force_ipv4", False, raising=False)
     monkeypatch.setattr(real_settings, "force_ipv6", False, raising=False)
     monkeypatch.setattr(real_settings, "js_runtime", "auto", raising=False)
+    monkeypatch.setattr(real_settings, "enable_subtitles", False, raising=False)
     monkeypatch.setattr(real_settings, "min_free_disk_gb", 0.0, raising=False)
     monkeypatch.setattr(real_settings, "download_link_base_url", "http://links.test", raising=False)
     monkeypatch.setattr(real_settings, "download_link_secret", "testsecret", raising=False)

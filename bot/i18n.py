@@ -33,6 +33,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Choose <b>Video</b>, <b>Audio</b> or <b>Thumbnail</b>.\n"
             "• <b>/playlist</b> &lt;url&gt; — download up to 10 items of a playlist.\n"
             "• <b>/language</b> — switch language.\n"
+            "• <b>/settings</b> — choose how subtitles are delivered.\n"
             "• Inline mode: type @{botname} + a URL in any chat.\n\n"
             "Sources: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest, SoundCloud, and more."
         ),
@@ -202,6 +203,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "sending_from_cache": "⚡ Resending from cache…",
         "inline_article_title": "Open in bot to download",
         "inline_article_desc": "Tap to open @{botname} and choose a format.",
+        "choose_subtitle": "💬 <b>{title}</b>\n\nWhich subtitles should be added?",
+        "button_no_subtitles": "🚫 No subtitles",
+        "button_more": "More…",
+        "subtitle_auto": " (auto)",
+        "subtitle_auto_translated": " (auto-translated)",
+        "choose_subtitle_mode": "💬 <b>{language}</b>\n\nHow should the subtitles be delivered?",
+        "button_mode_burn": "🔥 Burned-in",
+        "button_mode_embed": "📎 Embedded track",
+        "button_mode_srt": "📄 .srt file",
+        "subtitle_mode_hint": "Burned-in is the only mode that shows subtitles inside Telegram.",
+        "subtitle_burn_too_long": (
+            "This video is longer than {max} minutes, so the subtitles were embedded as a "
+            "track instead of burned in."
+        ),
+        "subtitle_failed": "⚠️ The subtitles could not be downloaded; sending the video without them.",
+        "settings_title": "⚙️ <b>Settings</b>\n\nDefault subtitle mode: {mode}",
+        "settings_prompt": "Choose the default subtitle mode:",
+        "settings_saved": "Default subtitle mode set to {mode}.",
     },
     DE: {
         "start": (
@@ -218,6 +237,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Wähle <b>Video</b>, <b>Audio</b> oder <b>Cover-Bild</b>.\n"
             "• <b>/playlist</b> &lt;url&gt; — lade bis zu 10 Elemente einer Playlist.\n"
             "• <b>/language</b> — Sprache ändern.\n"
+            "• <b>/settings</b> — festlegen, wie Untertitel bereitgestellt werden.\n"
             "• Inline-Modus: tippe @{botname} + eine URL in einen beliebigen Chat.\n\n"
             "Quellen: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest, SoundCloud u. v. m."
         ),
@@ -389,6 +409,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "sending_from_cache": "⚡ Erneut aus dem Cache gesendet…",
         "inline_article_title": "Im Bot öffnen und herunterladen",
         "inline_article_desc": "Tippen, um @{botname} zu öffnen und ein Format zu wählen.",
+        "choose_subtitle": "💬 <b>{title}</b>\n\nWelche Untertitel sollen hinzugefügt werden?",
+        "button_no_subtitles": "🚫 Keine Untertitel",
+        "button_more": "Mehr…",
+        "subtitle_auto": " (auto)",
+        "subtitle_auto_translated": " (automatisch übersetzt)",
+        "choose_subtitle_mode": "💬 <b>{language}</b>\n\nWie sollen die Untertitel bereitgestellt werden?",
+        "button_mode_burn": "🔥 Eingebrannt",
+        "button_mode_embed": "📎 Eingebettete Spur",
+        "button_mode_srt": "📄 .srt-Datei",
+        "subtitle_mode_hint": "Nur „Eingebrannt“ zeigt Untertitel direkt in Telegram an.",
+        "subtitle_burn_too_long": (
+            "Dieses Video ist länger als {max} Minuten, daher wurden die Untertitel als Spur "
+            "eingebettet statt eingebrannt."
+        ),
+        "subtitle_failed": "⚠️ Die Untertitel konnten nicht geladen werden; das Video wird ohne sie gesendet.",
+        "settings_title": "⚙️ <b>Einstellungen</b>\n\nStandard-Untertitelmodus: {mode}",
+        "settings_prompt": "Wähle den Standard-Untertitelmodus:",
+        "settings_saved": "Standard-Untertitelmodus auf {mode} gesetzt.",
     },
     FA: {
         "start": (
@@ -404,6 +442,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• <b>ویدیو</b>، <b>صدا</b> یا <b>جلد</b> را انتخاب کنید.\n"
             "• <b>/playlist</b> &lt;url&gt; — دانلود تا ۱۰ مورد از یک پلی‌لیست.\n"
             "• <b>/language</b> — تغییر زبان.\n"
+            "• <b>/settings</b> — انتخاب روش ارائه زیرنویس.\n"
             "• حالت اینلاین: در هر چتی @{botname} و سپس یک URL بنویسید.\n\n"
             "منابع: یوتیوب، اینستاگرام، تیک‌تاک، ایکس/توییتر، فیس‌بوک، ردیت، ویمیو، پینترست، ساندکلود و بیشتر."
         ),
@@ -573,6 +612,23 @@ _STRINGS: dict[str, dict[str, str]] = {
         "sending_from_cache": "⚡ ارسال مجدد از کش…",
         "inline_article_title": "برای دانلود در ربات باز کنید",
         "inline_article_desc": "برای باز کردن ربات و انتخاب فرمت اینجا را لمس کنید.",
+        "choose_subtitle": "💬 <b>{title}</b>\n\nکدام زیرنویس اضافه شود؟",
+        "button_no_subtitles": "🚫 بدون زیرنویس",
+        "button_more": "بیشتر…",
+        "subtitle_auto": " (خودکار)",
+        "subtitle_auto_translated": " (ترجمهٔ خودکار)",
+        "choose_subtitle_mode": "💬 <b>{language}</b>\n\nزیرنویس چگونه ارائه شود؟",
+        "button_mode_burn": "🔥 حک‌شده",
+        "button_mode_embed": "📎 مسیر جاسازی‌شده",
+        "button_mode_srt": "📄 فایل .srt",
+        "subtitle_mode_hint": "فقط حالت «حک‌شده» زیرنویس را داخل تلگرام نشان می‌دهد.",
+        "subtitle_burn_too_long": (
+            "این ویدیو از {max} دقیقه طولانی‌تر است، بنابراین زیرنویس به‌جای حک‌شدن به‌صورت مسیر جاسازی شد."
+        ),
+        "subtitle_failed": "⚠️ زیرنویس دانلود نشد؛ ویدیو بدون آن ارسال می‌شود.",
+        "settings_title": "⚙️ <b>تنظیمات</b>\n\nحالت پیش‌فرض زیرنویس: {mode}",
+        "settings_prompt": "حالت پیش‌فرض زیرنویس را انتخاب کنید:",
+        "settings_saved": "حالت پیش‌فرض زیرنویس به {mode} تغییر کرد.",
     },
 }
 

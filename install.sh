@@ -103,14 +103,20 @@ need() { command -v "$1" >/dev/null 2>&1; }
 
 if need apt-get; then
     install_pkgs ca-certificates git ffmpeg python3 python3-venv python3-pip || true
+    # Fonts for burned-in subtitles (Farsi/Arabic shaping needs Noto).
+    install_pkgs fonts-noto-core fonts-noto-extra || true
 elif need dnf; then
     install_pkgs ca-certificates git ffmpeg python3 python3-pip || true
+    install_pkgs google-noto-sans-fonts google-noto-fonts-common || true
 elif need yum; then
     install_pkgs ca-certificates git ffmpeg python3 python3-pip || true
+    install_pkgs google-noto-sans-fonts google-noto-fonts-common || true
 elif need apk; then
     install_pkgs ca-certificates git ffmpeg python3 py3-pip || true
+    install_pkgs font-noto || true
 elif need pacman; then
     install_pkgs ca-certificates git ffmpeg python python-pip || true
+    install_pkgs noto-fonts || true
 fi
 
 # pick the best python
