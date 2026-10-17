@@ -488,7 +488,7 @@ async def test_subtitle_burn_mode_invokes_burn(
     assert not bot.documents
 
 
-async def test_subtitle_burn_falls_back_to_embed_when_too_long(
+async def test_long_burn_shows_window_picker(
     services, runner, bot, make_message, make_callback, settings, monkeypatch
 ):
     from bot.services import subtitles
@@ -498,27 +498,74 @@ async def test_subtitle_burn_falls_back_to_embed_when_too_long(
     runner.info["duration"] = 600
     runner.info["subtitles"] = {"en": [{}]}
     runner.info["automatic_captions"] = {"en": [{}]}
-    embedded: list[tuple] = []
-    burn_called = {"n": 0}
+    burned = {"n": 0}
 
-    async def fake_burn(video, srt, settings_, **kwargs):
-        burn_called["n"] += 1
-        return True
-
-    async def fake_embed(video, srt, **kwargs):
-        embedded.append((video, srt))
+    async def fake_burn(*args, **kwargs):
+        burned["n"] += 1
         return True
 
     monkeypatch.setattr(subtitles, "burn_subtitles", fake_burn)
-    monkeypatch.setattr(subtitles, "embed_subtitles", fake_embed)
+    monkeypatch.setattr(subtitles, "burn_segment", fake_burn)
     msg = make_message()
     await _open_flow(services, msg, runner)
     await links.on_format_pick(make_callback(data="dl:video_720", message=msg), bot)
     await links.on_format_pick(make_callback(data="dl:sub:0", message=msg), bot)
     await links.on_format_pick(make_callback(data="dl:submode:burn", message=msg), bot)
-    assert burn_called["n"] == 0
-    assert len(embedded) == 1
-    assert any("longer than" in e for e in msg.edits)
+    assert burned["n"] == 0
+    assert not bot.videos
+    assert "Window to burn" in msg.edits[-1]
+    callback_data = [b.callback_data for row in msg.markups[-1].inline_keyboard for b in row]
+    assert any(c.endswith(":seg:go") for c in callback_data)
+
+
+async def test_segment_confirm_downloads_window(
+    services, runner, bot, make_message, make_callback, settings, monkeypatch
+):
+    from bot.services import subtitles
+
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    monkeypatch.setattr(settings, "subtitle_burn_max_minutes", 1, raising=False)
+    runner.info["duration"] = 600
+    runner.info["subtitles"] = {"en": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}]}
+    calls: dict = {}
+
+    async def fake_segment(video, srt, settings_, **kwargs):
+        calls.update(kwargs)
+        return True
+
+    async def _zero(*args, **kwargs):
+        return 0.0
+
+    monkeypatch.setattr(subtitles, "burn_segment", fake_segment)
+    monkeypatch.setattr(links, "probe_duration", _zero)
+    monkeypatch.setattr(subtitles, "probe_start_time", _zero)
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    await links.on_format_pick(make_callback(data="dl:video_720", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:sub:0", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:submode:burn", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:seg:15", message=msg), bot)
+    assert links._pending[USER].chosen_start == 540  # clamped to duration - cap
+    await links.on_format_pick(make_callback(data="dl:seg:go", message=msg), bot)
+    assert calls["start_s"] == 540
+    assert calls["duration_s"] == 60
+    assert runner.calls[-1].section == (540, 600)
+
+
+async def test_segment_nudge_is_clamped(services, runner, bot, make_message, make_callback, settings, monkeypatch):
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    monkeypatch.setattr(settings, "subtitle_burn_max_minutes", 1, raising=False)
+    runner.info["duration"] = 600
+    runner.info["subtitles"] = {"en": [{}]}
+    runner.info["automatic_captions"] = {"en": [{}]}
+    msg = make_message()
+    await _open_flow(services, msg, runner)
+    await links.on_format_pick(make_callback(data="dl:video_720", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:sub:0", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:submode:burn", message=msg), bot)
+    await links.on_format_pick(make_callback(data="dl:seg:-15", message=msg), bot)
+    assert links._pending[USER].chosen_start == 0  # cannot go below zero
 
 
 async def test_subtitles_not_offered_without_captions(

@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -95,6 +95,7 @@ class DownloadJob:
     title_hint: str | None = None
     subtitle_langs: str | None = None  # comma-separated yt-dlp --sub-langs keys
     subtitle_auto: bool = False  # picked key is an automatic/translated track
+    section: tuple[float, float] | None = None  # (start_s, end_s) media window
 
 
 @dataclass
@@ -434,6 +435,11 @@ class YtDlpRunner:
         if job.format_key.startswith("video"):
             # Put the moov atom first so uploads/seeking are efficient.
             args += ["--postprocessor-args", "Merger:-movflags +faststart"]
+            if job.section:
+                start_s, end_s = job.section
+                # Best-effort: some extractors ignore this and download in full;
+                # the caller trims afterwards, so a non-restricted file is fine.
+                args += ["--download-sections", f"*{_fmt_section_ts(start_s)}-{_fmt_section_ts(end_s)}"]
         args += self._format_args(job.format_key, job.height, job.audio_codec)
         if write_thumbnail:
             args += ["--write-thumbnail", "--convert-thumbnails", "jpg"]
@@ -463,6 +469,17 @@ class YtDlpRunner:
             return _collect_media_files(job.tmpdir)
         except Exception as exc:
             errtxt = str(exc)
+            if job.section and not _is_proxy_failure(errtxt):
+                # Some extractors cannot restrict downloads to a section; fall back
+                # to the full file and let the caller trim it.
+                log.warning("section download failed, retrying in full: %s", errtxt)
+                return await self.download(
+                    replace(job, section=None),
+                    on_progress=on_progress,
+                    start_callback=start_callback,
+                    write_thumbnail=write_thumbnail,
+                    tried_no_proxy=tried_no_proxy,
+                )
             if used_proxy and not tried_no_proxy and _is_proxy_failure(errtxt):
                 host = _url_host(job.url)
                 log.warning("proxy unreachable, retrying without proxy for %s", host or "unknown")
@@ -818,6 +835,13 @@ def _parse_size(number: str, unit: str) -> int:
     unit = unit.replace("i", "").replace("I", "").upper()
     mult = {"B": 1, "K": 1024, "KB": 1024, "M": 1024**2, "MB": 1024**2, "G": 1024**3, "GB": 1024**3}
     return int(float(number) * mult.get(unit, 1))
+
+
+def _fmt_section_ts(seconds: float) -> str:
+    total = int(max(0, seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def _collect_media_files(tmpdir: Path) -> list[Path]:

@@ -194,7 +194,7 @@ lives in [`.env.example`](../.env.example); defaults:
 | `PODCAST_MAX_FEED_BYTES`/`_ITEMS` | 10485760 / 200 | Feed size / item caps. |
 | `PODCAST_ITUNES_COOLDOWN_S` | 300 | Cooldown per storefront after a 403/429. |
 | `ENABLE_SUBTITLES` | true | Subtitle picker + mode prompt (section 15). |
-| `SUBTITLE_BURN_MAX_MINUTES` | 15 | Longer videos fall back from burn-in to embed/srt. |
+| `SUBTITLE_BURN_MAX_MINUTES` | 15 | Max burned window; longer videos open the window picker. |
 | `SUBTITLE_DEFAULT_MODE` | `burn` | `burn`/`embed`/`srt`; per-user override via `/settings`. |
 | `SUBTITLE_PAGE_SIZE` | 6 | Manual tracks per keyboard page. |
 | `SUBTITLE_FONT`/`_FONT_SIZE`/`_OUTLINE`/`_MARGIN_V` | Noto Sans / 20 / 2 / 24 | libass burn-in styling. |
@@ -543,16 +543,26 @@ lines auto captions repeat).
 Flow: picking a **video** quality opens the subtitle keyboard (`sub:none`,
 paginated `sub:<idx>`, `sub:more:<page>`) → a mode prompt (`submode:burn|embed|
 srt`, default marked with a tick, seeded from the stored per-user `/settings`
-preference) → download. Audio, playlists and galleries skip the flow.
+preference) → download. Audio, playlists and galleries skip the flow. For a
+video longer than `SUBTITLE_BURN_MAX_MINUTES`, choosing `burn` instead opens a
+**window picker** (`seg:-15|-5|5|15|go|cancel`): the start is nudged in ±5/±15
+min steps, clamped to `[0, duration - cap]`, and `go` burns only that window.
 
 Delivery (`links._apply_subtitles`): the downloaded track is normalised to SRT;
 `srt` sends it as a document after the media; `embed` runs ffmpeg `-c copy -c:s
 mov_text` (mp4 only, ISO 639-2 language tag); `burn` re-encodes with
 `libx264 -preset veryfast` (default `-crf 23`, or a target bitrate when the result
 would exceed the upload limit) using `-threads SUBTITLE_THREADS` and libass
-styling. Videos longer than `SUBTITLE_BURN_MAX_MINUTES` fall back to embed.
+styling. `_burn_window` handles the long-video window: `DownloadJob.section`
+makes yt-dlp `--download-sections` fetch just the window (falling back to a full
+download when an extractor ignores it — the file length is probed to tell the two
+apart), `slice_srt` rebases the overlapping cues onto the clip timeline (offset
+by the clip's real start PTS from `probe_start_time`, or by the window start when
+a seek resets timestamps), and `burn_segment` runs `-ss <start>` (only for a full
+download) + `-t <cap>`, re-encoding audio to `aac` when it seeks.
 ffmpeg runs as a killable argv list with `-progress pipe:1` (never a shell).
 Delivered videos with subtitles use a distinct cache key
-(`fmt#sub:<key>:<mode>`) so a cached plain file is never returned for a
-subtitled request. `/settings` reads/writes `users.subtitle_mode` (migration 5);
+(`fmt#sub:<key>:<mode>`, plus `@<start>` for a window) so a cached plain file is
+never returned for a subtitled request. `/settings` reads/writes
+`users.subtitle_mode` (migration 5);
 fonts are installed by `install.sh`/`deploy.sh`/the Dockerfile.

@@ -304,6 +304,56 @@ def clean_subtitle_text(data: str) -> str:
     return cues_to_srt(parse_cues(data))
 
 
+def _ts_to_seconds(raw: str) -> float | None:
+    value = (raw or "").strip().replace(",", ".")
+    if not value:
+        return None
+    parts = value.split(":")
+    if len(parts) == 3:
+        hours, minutes, rest = parts
+    elif len(parts) == 2:
+        hours, minutes, rest = "0", parts[0], parts[1]
+    else:
+        return None
+    try:
+        return int(hours) * 3600 + int(minutes) * 60 + float(rest)
+    except ValueError:
+        return None
+
+
+def _seconds_to_ts(seconds: float) -> str:
+    total_ms = int(round(max(0.0, seconds) * 1000))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    secs, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def slice_srt(data: str, start_s: float, dur_s: float, *, offset_s: float | None = None) -> str:
+    """Keep cues overlapping ``[start_s, start_s+dur_s]`` and rebase their times.
+
+    ``offset_s`` is the amount subtracted from every cue time so the result lines
+    up with the produced clip's timeline. It defaults to ``start_s`` (the clip is
+    assumed to start at timestamp 0); pass the clip's real first PTS otherwise.
+    """
+    if dur_s <= 0:
+        return ""
+    offset = start_s if offset_s is None else offset_s
+    end_limit = start_s + dur_s
+    kept: list[tuple[str, str, str]] = []
+    for begin, end, text in parse_cues(data):
+        b = _ts_to_seconds(begin)
+        e = _ts_to_seconds(end)
+        if b is None or e is None:
+            continue
+        if e <= start_s or b >= end_limit:
+            continue
+        shifted_b = max(0.0, b - offset)
+        shifted_e = max(shifted_b, e - offset)
+        kept.append((_seconds_to_ts(shifted_b), _seconds_to_ts(shifted_e), text))
+    return cues_to_srt(kept)
+
+
 # --------------------------------------------------------------------------
 # ffmpeg
 # --------------------------------------------------------------------------
@@ -338,17 +388,31 @@ def build_burn_args(
     settings: Settings,
     *,
     bitrate_kbps: int | None = None,
+    seek_s: float = 0.0,
+    duration_s: float = 0.0,
 ) -> list[str]:
-    """Assemble the ffmpeg argument list to burn ``srt`` into ``video``."""
+    """Assemble the ffmpeg argument list to burn ``srt`` into ``video``.
+
+    ``seek_s`` seeks the input (fast, resets output time to zero, so the SRT must
+    be rebased to match) and ``duration_s`` trims the output; both are used when
+    burning a window out of a longer download.
+    """
     style = force_style(settings)
     escaped = escape_ffmpeg_filter_path(str(srt))
     vf = f"subtitles=filename='{escaped}':force_style='{style}'"
-    args = ["-y", "-i", str(video), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast"]
+    args = ["-y"]
+    if seek_s > 0:
+        args += ["-ss", f"{seek_s:.3f}"]
+    args += ["-i", str(video), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast"]
     if bitrate_kbps:
         args += ["-b:v", f"{int(bitrate_kbps)}k"]
     else:
         args += ["-crf", "23"]
-    args += ["-threads", str(max(1, settings.subtitle_threads)), "-c:a", "copy"]
+    args += ["-threads", str(max(1, settings.subtitle_threads))]
+    # A seek resets timestamps, so copy would risk A/V drift; re-encode instead.
+    args += ["-c:a", "aac" if seek_s > 0 else "copy"]
+    if duration_s > 0:
+        args += ["-t", f"{duration_s:.3f}"]
     args += ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(out)]
     return args
 
@@ -457,6 +521,71 @@ async def burn_subtitles(
         args, timeout=timeout, duration_s=duration_s, on_progress=on_progress
     )
     return _replace_with(video, out, ok)
+
+
+async def burn_segment(
+    video: Path,
+    srt: Path,
+    settings: Settings,
+    *,
+    start_s: float,
+    duration_s: float,
+    seek_s: float = 0.0,
+    offset_s: float | None = None,
+    bitrate_kbps: int | None = None,
+    on_progress: ProgressCallback | None = None,
+    timeout: int = 1800,
+) -> bool:
+    """Burn the ``[start_s, start_s+duration_s]`` window of ``video`` in place.
+
+    The SRT is sliced to the window (``offset_s`` rebases cue times onto the clip
+    timeline); ``seek_s`` trims a full-length file, or stays 0 when the file is
+    already just the window.
+    """
+    try:
+        raw = srt.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    sliced = slice_srt(raw, start_s, duration_s, offset_s=offset_s)
+    if not sliced.strip():
+        return False
+    clip_srt = srt.with_name(f"{srt.stem}.clip.srt")
+    try:
+        clip_srt.write_text(sliced, encoding="utf-8")
+    except OSError:
+        return False
+    out = video.with_name(f"{video.stem}.burned{video.suffix}")
+    args = build_burn_args(
+        video, clip_srt, out, settings, bitrate_kbps=bitrate_kbps, seek_s=seek_s, duration_s=duration_s
+    )
+    ok = await _run_ffmpeg_progress(
+        args, timeout=timeout, duration_s=duration_s, on_progress=on_progress
+    )
+    _remove(clip_srt)
+    return _replace_with(video, out, ok)
+
+
+async def probe_start_time(path: Path) -> float:
+    """Best-effort first timestamp of ``path`` via ffprobe (off the event loop)."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return 0.0
+    import subprocess
+
+    def _run() -> float:
+        try:
+            result = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=start_time", "-of",
+                 "default=noprint_wrappers=1:nokey=1", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return float(result.stdout.strip())
+        except (ValueError, subprocess.SubprocessError, OSError):
+            return 0.0
+
+    return await asyncio.to_thread(_run)
 
 
 async def embed_subtitles(

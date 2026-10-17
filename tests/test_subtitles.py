@@ -141,6 +141,38 @@ def test_build_burn_args_uses_bitrate_when_given():
     assert "-crf" not in args
 
 
+def test_build_burn_args_seek_and_duration():
+    args = sub.build_burn_args(Path("v.mp4"), Path("s.srt"), Path("o.mp4"), _settings(), seek_s=120.0, duration_s=60.0)
+    assert args.index("-ss") < args.index("-i")  # seek the input, not the output
+    assert args[args.index("-ss") + 1] == "120.000"
+    assert args[args.index("-t") + 1] == "60.000"
+    assert args[args.index("-c:a") + 1] == "aac"  # re-encode after a seek
+
+
+def test_slice_srt_keeps_overlap_and_rebases():
+    data = (
+        "1\n00:00:10,000 --> 00:00:12,000\nearly\n\n"
+        "2\n00:01:05,000 --> 00:01:10,000\ninside\n\n"
+        "3\n00:02:30,000 --> 00:02:35,000\nlate\n"
+    )
+    out = sub.slice_srt(data, 60.0, 60.0)
+    assert "early" not in out  # before the window
+    assert "late" not in out  # after the window
+    assert "inside" in out
+    assert "00:00:05,000 --> 00:00:10,000" in out  # rebased by -start
+
+
+def test_slice_srt_offsets_when_clip_keeps_absolute_time():
+    data = "1\n00:01:05,000 --> 00:01:10,000\nmid\n"
+    out = sub.slice_srt(data, 60.0, 60.0, offset_s=0.0)
+    assert "00:01:05,000 --> 00:01:10,000" in out
+
+
+def test_slice_srt_empty_when_no_overlap():
+    data = "1\n00:00:01,000 --> 00:00:02,000\nx"
+    assert sub.slice_srt(data, 600.0, 60.0) == ""
+
+
 def test_escape_ffmpeg_filter_path():
     escaped = sub.escape_ffmpeg_filter_path("/tmp/a:b'c,d.mp4")
     assert "\\:" in escaped

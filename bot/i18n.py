@@ -218,6 +218,16 @@ _STRINGS: dict[str, dict[str, str]] = {
             "track instead of burned in."
         ),
         "subtitle_failed": "⚠️ The subtitles could not be downloaded; sending the video without them.",
+        "subtitle_window_prompt": (
+            "🕒 This video is {duration} long — a burn-in is limited to {max} min.\n"
+            "Window to burn: <b>{start}</b> → <b>{end}</b>\n\n"
+            "Move the start, then confirm."
+        ),
+        "button_seg_minus15": "⏪ 15 min",
+        "button_seg_minus5": "◀️ 5 min",
+        "button_seg_plus5": "5 min ▶️",
+        "button_seg_plus15": "15 min ⏩",
+        "button_seg_burn": "🔥 Burn this window",
         "settings_title": "⚙️ <b>Settings</b>\n\nDefault subtitle mode: {mode}",
         "settings_prompt": "Choose the default subtitle mode:",
         "settings_saved": "Default subtitle mode set to {mode}.",
@@ -424,6 +434,16 @@ _STRINGS: dict[str, dict[str, str]] = {
             "eingebettet statt eingebrannt."
         ),
         "subtitle_failed": "⚠️ Die Untertitel konnten nicht geladen werden; das Video wird ohne sie gesendet.",
+        "subtitle_window_prompt": (
+            "🕒 Dieses Video ist {duration} lang — ein Einbrennen ist auf {max} Min. begrenzt.\n"
+            "Fenster zum Einbrennen: <b>{start}</b> → <b>{end}</b>\n\n"
+            "Verschiebe den Start und bestätige."
+        ),
+        "button_seg_minus15": "⏪ 15 Min.",
+        "button_seg_minus5": "◀️ 5 Min.",
+        "button_seg_plus5": "5 Min. ▶️",
+        "button_seg_plus15": "15 Min. ⏩",
+        "button_seg_burn": "🔥 Dieses Fenster einbrennen",
         "settings_title": "⚙️ <b>Einstellungen</b>\n\nStandard-Untertitelmodus: {mode}",
         "settings_prompt": "Wähle den Standard-Untertitelmodus:",
         "settings_saved": "Standard-Untertitelmodus auf {mode} gesetzt.",
@@ -626,6 +646,16 @@ _STRINGS: dict[str, dict[str, str]] = {
             "این ویدیو از {max} دقیقه طولانی‌تر است، بنابراین زیرنویس به‌جای حک‌شدن به‌صورت مسیر جاسازی شد."
         ),
         "subtitle_failed": "⚠️ زیرنویس دانلود نشد؛ ویدیو بدون آن ارسال می‌شود.",
+        "subtitle_window_prompt": (
+            "🕒 این ویدیو {duration} است — حک کردن به {max} دقیقه محدود است.\n"
+            "بازهٔ حک: <b>{start}</b> → <b>{end}</b>\n\n"
+            "شروع را جابه‌جا کنید و تأیید کنید."
+        ),
+        "button_seg_minus15": "⏪ ۱۵ دقیقه",
+        "button_seg_minus5": "◀️ ۵ دقیقه",
+        "button_seg_plus5": "۵ دقیقه ▶️",
+        "button_seg_plus15": "۱۵ دقیقه ⏩",
+        "button_seg_burn": "🔥 همین بازه حک شود",
         "settings_title": "⚙️ <b>تنظیمات</b>\n\nحالت پیش‌فرض زیرنویس: {mode}",
         "settings_prompt": "حالت پیش‌فرض زیرنویس را انتخاب کنید:",
         "settings_saved": "حالت پیش‌فرض زیرنویس به {mode} تغییر کرد.",

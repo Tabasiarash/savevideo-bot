@@ -45,6 +45,7 @@ from bot.services.downloader import (
     YtDlpError,
     cleanup_dir,
     disk_free_bytes,
+    probe_duration,
     probe_media,
     video_quality_rows,
 )
@@ -108,6 +109,10 @@ class PendingFlow:
     chosen_format: str | None = None
     chosen_subtitle: SubtitleOption | None = None
     chosen_mode: str | None = None
+    # For very long videos in burn mode: the start (seconds) of the 15-minute
+    # window to burn, and whether a window was chosen at all.
+    chosen_start: float = 0.0
+    chosen_segment: bool = False
     # When the flow was prepared; a picker older than PENDING_TTL_S is stale and
     # its buttons answer with "expired_selection" instead of acting on it.
     created_at: float = field(default_factory=time.time)
@@ -323,6 +328,11 @@ async def on_format_pick(callback: CallbackQuery, bot: Bot) -> None:
         await _on_submode_pick(callback, bot, flow, fmt[len("submode:") :], lang)
         return
 
+    if fmt.startswith("seg:"):
+        await callback.answer()
+        await _on_segment_pick(callback, bot, flow, fmt[len("seg:") :], lang)
+        return
+
     await callback.answer()
     if _should_offer_subtitles(flow, fmt):
         flow.chosen_format = fmt
@@ -379,7 +389,56 @@ async def _on_submode_pick(callback: CallbackQuery, bot: Bot, flow: PendingFlow,
         await callback.answer(text(lang, "expired_selection"), show_alert=True)
         return
     flow.chosen_mode = settings.normalize_subtitle_mode(value)
+    if flow.chosen_mode == subtitles.BURN and _segment_cap_s() and flow.duration > _segment_cap_s():
+        # Long video in burn mode: let the user pick which 15-minute window to burn.
+        flow.chosen_segment = False
+        flow.chosen_start = 0.0
+        await _edit(
+            message=callback.message,
+            body=_segment_text(flow, lang),
+            reply_markup=_segment_keyboard(flow, lang),
+        )
+        return
     await _run_download(callback, bot, flow, flow.chosen_format or "")
+
+
+def _segment_cap_s() -> float:
+    if not settings.enable_subtitles:
+        return 0.0
+    return float(settings.subtitle_burn_max_s)
+
+
+def _segment_end(flow: PendingFlow) -> float:
+    return max(0.0, flow.duration - _segment_cap_s())
+
+
+def _clamp_start(flow: PendingFlow, start: float) -> float:
+    return min(max(0.0, start), _segment_end(flow))
+
+
+async def _on_segment_pick(callback: CallbackQuery, bot: Bot, flow: PendingFlow, value: str, lang: str) -> None:
+    if value == "cancel":
+        await callback.answer(text(lang, "cancel"))
+        if _pending.get(callback.from_user.id) is flow:
+            _pending.pop(callback.from_user.id, None)
+        cleanup_dir(flow.tmpdir)
+        await _try_delete(callback.message)
+        return
+    if value == "go":
+        flow.chosen_segment = True
+        flow.chosen_start = _clamp_start(flow, flow.chosen_start)
+        await _run_download(callback, bot, flow, flow.chosen_format or "")
+        return
+    delta = {"15": 900.0, "5": 300.0, "-15": -900.0, "-5": -300.0}.get(value)
+    if delta is None:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+    flow.chosen_start = _clamp_start(flow, flow.chosen_start + delta)
+    await _edit(
+        message=callback.message,
+        body=_segment_text(flow, lang),
+        reply_markup=_segment_keyboard(flow, lang),
+    )
 
 
 async def _send_thumbnail(callback: CallbackQuery, bot: Bot, flow: PendingFlow, lang: str) -> None:
@@ -476,6 +535,17 @@ async def _do_download(srv, bot: Bot, flow: PendingFlow, fmt: str, user_id: int,
     if option is not None and flow.prefix != "pl":
         job.subtitle_langs = option.key
         job.subtitle_auto = option.kind in ("auto", "translated")
+    cap = _segment_cap_s()
+    if (
+        option is not None
+        and fmt.startswith("video")
+        and flow.chosen_mode == subtitles.BURN
+        and flow.chosen_segment
+        and cap
+        and flow.duration > cap
+    ):
+        start = _clamp_start(flow, flow.chosen_start)
+        job.section = (start, min(flow.duration, start + cap))
     editor = _ProgressEditor(flow)
 
     try:
@@ -1083,6 +1153,47 @@ def _subtitle_mode_keyboard(flow: PendingFlow) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _fmt_clock(seconds: float) -> str:
+    total = int(max(0, seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:d}:{secs:02d}"
+
+
+def _segment_text(flow: PendingFlow, lang: str) -> str:
+    cap = _segment_cap_s()
+    start = _clamp_start(flow, flow.chosen_start)
+    return text(
+        lang,
+        "subtitle_window_prompt",
+        duration=_fmt_clock(flow.duration),
+        max=int(cap // 60) or 1,
+        start=_fmt_clock(start),
+        end=_fmt_clock(start + cap),
+    )
+
+
+def _segment_keyboard(flow: PendingFlow, lang: str) -> InlineKeyboardMarkup:
+    def nudge(key: str, value: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(text=text(lang, key), callback_data=f"{flow.prefix}:seg:{value}")
+
+    rows = [
+        [
+            nudge("button_seg_minus15", "-15"),
+            nudge("button_seg_minus5", "-5"),
+            nudge("button_seg_plus5", "5"),
+            nudge("button_seg_plus15", "15"),
+        ],
+        [
+            InlineKeyboardButton(text=text(lang, "button_seg_burn"), callback_data=f"{flow.prefix}:seg:go"),
+            InlineKeyboardButton(text=text(lang, "button_cancel"), callback_data=f"{flow.prefix}:seg:cancel"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _stored_subtitle_mode(user_id: int) -> str | None:
     try:
         return await get_services().db.get_subtitle_mode(user_id)
@@ -1093,7 +1204,10 @@ async def _stored_subtitle_mode(user_id: int) -> str | None:
 
 def _cache_format(flow: PendingFlow, fmt: str) -> str:
     if flow.chosen_subtitle and flow.chosen_mode:
-        return f"{fmt}#sub:{flow.chosen_subtitle.key}:{flow.chosen_mode}"
+        key = f"{fmt}#sub:{flow.chosen_subtitle.key}:{flow.chosen_mode}"
+        if flow.chosen_mode == subtitles.BURN and flow.chosen_segment:
+            key += f"@{int(flow.chosen_start)}"
+        return key
     return fmt
 
 
@@ -1151,7 +1265,10 @@ async def _apply_subtitles(srv, bot: Bot, flow: PendingFlow, parts: list[Path], 
 
     target = parts[0]
     if mode == subtitles.BURN:
-        if flow.duration and flow.duration > settings.subtitle_burn_max_s:
+        cap = _segment_cap_s()
+        if flow.chosen_segment and cap and (not flow.duration or flow.duration > cap):
+            return await _burn_window(flow, target, cleaned, cap)
+        if flow.duration and flow.duration > cap:
             await _edit(
                 message=flow.status_message,
                 body=text(flow.lang, "subtitle_burn_too_long", max=settings.subtitle_burn_max_minutes),
@@ -1173,10 +1290,45 @@ async def _apply_subtitles(srv, bot: Bot, flow: PendingFlow, parts: list[Path], 
             if ok:
                 return None
             await _edit(message=flow.status_message, body=text(flow.lang, "subtitle_failed"))
-            return cleaned
+        return cleaned
 
     if await subtitles.embed_subtitles(target, cleaned, language=option.code):
         return None
+    return cleaned
+
+
+async def _burn_window(flow: PendingFlow, target: Path, cleaned: Path, cap: float) -> Path | None:
+    """Burn the selected window of a long video (full-burn not possible)."""
+    start = _clamp_start(flow, flow.chosen_start)
+    clip_dur = await probe_duration(target)
+    if clip_dur > cap + 5:
+        # The download ignored the section request: trim here (seek resets PTS).
+        seek = start
+        offset: float | None = start
+    else:
+        # The file already is the window; rebase cues onto its real start PTS.
+        first_pts = await subtitles.probe_start_time(target)
+        seek = 0.0
+        offset = start - first_pts
+    editor = _ProgressEditor(flow)
+
+    async def _progress(percent: float) -> None:
+        await editor.update(percent, 0, 0)
+
+    ok = await subtitles.burn_segment(
+        target,
+        cleaned,
+        settings,
+        start_s=start,
+        duration_s=cap,
+        seek_s=seek,
+        offset_s=offset,
+        bitrate_kbps=_burn_bitrate(target, cap),
+        on_progress=_progress,
+    )
+    if ok:
+        return None
+    await _edit(message=flow.status_message, body=text(flow.lang, "subtitle_failed"))
     return cleaned
 
 

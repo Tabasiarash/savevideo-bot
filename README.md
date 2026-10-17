@@ -264,9 +264,10 @@ auto track `(auto)` and, when available, your language's translated track
 After picking a language the bot asks how to deliver it:
 
 - **Burned in** (default) — subtitles are rendered into the picture, the only
-  mode Telegram's player displays. Costs a re-encode (`libx264`), so videos
-  longer than `SUBTITLE_BURN_MAX_MINUTES` (15) automatically fall back to
-  embedding and the user is told.
+  mode Telegram's player displays. Costs a re-encode (`libx264`). Videos longer
+  than `SUBTITLE_BURN_MAX_MINUTES` (15) cannot be burned in full: the bot asks
+  for the start of a 15-minute window (adjustable with ±5/±15-min buttons) and
+  returns just that excerpt, burning the matching subtitle slice into it.
 - **Embedded track** — a soft `mov_text` track (mp4). Playable in VLC etc., but
   **not shown by Telegram's player**.
 - **`.srt` file**: the video is sent normally and the subtitle file is sent as a

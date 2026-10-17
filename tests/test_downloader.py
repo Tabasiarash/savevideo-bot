@@ -155,6 +155,43 @@ async def test_download_adds_faststart_for_video(monkeypatch, tmp_path):
     assert "Merger:-movflags +faststart" in captured["args"]
 
 
+async def test_download_uses_section_when_set(monkeypatch, tmp_path):
+    captured: dict[str, list[str]] = {}
+    runner = YtDlpRunner(_settings())
+
+    async def fake_run(args, **kwargs):
+        captured["args"] = args
+
+    monkeypatch.setattr(runner, "_run_and_read_progress", fake_run)
+    job = DownloadJob(
+        url="https://youtu.be/x", format_key="video_720", tmpdir=tmp_path, height=720, section=(125.0, 1025.0)
+    )
+    await runner.download(job)
+    args = captured["args"]
+    assert args[args.index("--download-sections") + 1] == "*00:02:05-00:17:05"
+
+
+async def test_download_section_failure_falls_back_to_full(monkeypatch, tmp_path):
+    runner = YtDlpRunner(_settings())
+    seen: list[list[str]] = []
+    calls = {"n": 0}
+
+    async def fake_run(args, **kwargs):
+        calls["n"] += 1
+        seen.append(args)
+        if calls["n"] == 1:
+            raise DownloadError("Sections are not supported for this extractor")
+
+    monkeypatch.setattr(runner, "_run_and_read_progress", fake_run)
+    job = DownloadJob(
+        url="https://youtu.be/x", format_key="video_720", tmpdir=tmp_path, height=720, section=(0.0, 60.0)
+    )
+    await runner.download(job)
+    assert calls["n"] == 2
+    assert "--download-sections" in seen[0]
+    assert "--download-sections" not in seen[1]
+
+
 async def test_download_omits_faststart_for_audio(monkeypatch, tmp_path):
     captured: dict[str, list[str]] = {}
     runner = YtDlpRunner(_settings())
