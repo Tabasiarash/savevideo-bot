@@ -131,12 +131,18 @@ async def test_start_is_not_unknown_command(services, dispatcher, aiogram_bot):
 
 async def test_help_command(services, dispatcher, aiogram_bot):
     await feed(dispatcher, aiogram_bot, "/help")
-    assert get_text("en", "help", botname="test_bot") in texts(aiogram_bot)
+    assert (
+        get_text("en", "help", botname="test_bot", playlist=services.settings.playlist_max_items)
+        in texts(aiogram_bot)
+    )
 
 
 async def test_help_command_with_mention(services, dispatcher, aiogram_bot):
     await feed(dispatcher, aiogram_bot, "/help@test_bot")
-    assert get_text("en", "help", botname="test_bot") in texts(aiogram_bot)
+    assert (
+        get_text("en", "help", botname="test_bot", playlist=services.settings.playlist_max_items)
+        in texts(aiogram_bot)
+    )
 
 
 async def test_language_command_shows_keyboard(services, dispatcher, aiogram_bot):

@@ -38,7 +38,7 @@ Spotify itself; see [Spotify](#spotify-metadata-match).
   before a URL ever reaches yt-dlp.
 - 📃 **Playlists** (`/playlist`) and **media groups** for carousel posts.
 - 🔍 **Inline mode** (`@yourbot <url>`) with cached results and deep links.
-- 🌍 **Localisation**: English, German, Farsi (fallback chain per user).
+- 🌍 **Localisation & guide**: English, German, Farsi; welcome buttons, `/tutorial` guide, `/settings` for subtitle mode.
 - 🛠️ **Admin tools**: `/stats`, `/users`, `/broadcast`, `/ban`, `/unban`,
   `/update_ytdlp`, `/cleanup`, `/health`.
 - ♻️ **Self-updating yt-dlp** (daily) plus automatic update-and-retry when an

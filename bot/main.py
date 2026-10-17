@@ -86,8 +86,10 @@ def build_dispatcher() -> Dispatcher:
 
 
 PUBLIC_COMMANDS = [
-    types.BotCommand(command="start", description="Start / show help"),
-    types.BotCommand(command="help", description="How to use the bot"),
+    types.BotCommand(command="start", description="Start / welcome"),
+    types.BotCommand(command="help", description="Quick help overview"),
+    types.BotCommand(command="tutorial", description="Guide: abilities & limits"),
+    types.BotCommand(command="playlist", description="Download a playlist"),
     types.BotCommand(command="language", description="Change language"),
 ]
 if settings.enable_subtitles:

@@ -20,6 +20,7 @@ from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
@@ -135,6 +136,16 @@ def _flow_expired(flow: PendingFlow) -> bool:
 # --------------------------------------------------------------------------
 # Entry: plain text message containing URLs
 # --------------------------------------------------------------------------
+
+@router.message(Command("playlist"))
+async def cmd_playlist(message: Message, command: CommandObject) -> None:
+    args = command.args or ""
+    urls = extract_urls(args)
+    if not urls:
+        await message.answer(text(await _lang_for(message), "url_invalid"))
+        return
+    await handle_urls(message, urls, playlist=True)
+
 
 @router.message(F.text)
 async def on_text_message(message: Message) -> None:

@@ -18,6 +18,28 @@ async def _open_flow(services, msg, runner, url="https://www.youtube.com/watch?v
 # --- entry -----------------------------------------------------------------
 
 
+async def test_cmd_playlist_invalid_url(services, make_message):
+    from types import SimpleNamespace
+    cmd = SimpleNamespace(args="", command="playlist", prefix="/", mention=None)
+    msg = make_message()
+    await links.cmd_playlist(msg, cmd)
+    assert "doesn't look like a valid http(s) URL" in msg.sent[0]
+
+
+async def test_cmd_playlist_valid_url(services, make_message, monkeypatch):
+    from types import SimpleNamespace
+    cmd = SimpleNamespace(args="https://www.youtube.com/playlist?list=123", command="playlist", prefix="/", mention=None)
+    called = []
+
+    async def fake_handle_urls(message, urls, playlist):
+        called.append((urls, playlist))
+
+    monkeypatch.setattr(links, "handle_urls", fake_handle_urls)
+    msg = make_message()
+    await links.cmd_playlist(msg, cmd)
+    assert called == [(["https://www.youtube.com/playlist?list=123"], True)]
+
+
 async def test_on_text_message_unknown_command(services, make_message):
     msg = make_message(text="/nope")
     await links.on_text_message(msg)

@@ -21,22 +21,64 @@ _STRINGS: dict[str, dict[str, str]] = {
     EN: {
         "start": (
             "Hi {name}! 👋\n\n"
-            "I can download videos and audio from YouTube, Instagram, TikTok, X/Twitter, "
-            "Facebook, Reddit, Vimeo, Pinterest, SoundCloud and many other sites.\n\n"
-            "Just send me a link.\n\n"
+            "Send me a link and I'll download the <b>video</b>, the <b>audio</b> or the "
+            "<b>cover image</b> — from YouTube, Instagram, TikTok, X/Twitter, Facebook, "
+            "Reddit, Vimeo, Pinterest, SoundCloud and many other sites.\n\n"
+            "I can also add <b>subtitles</b> and download <b>playlists</b>.\n\n"
+            "New here? Tap <b>📖 Tutorial</b> to see everything I can do and my limits.\n\n"
             "❕ Disclaimer: you are responsible for respecting the copyright of the "
             "content and the terms of service of the respective site."
         ),
         "help": (
             "How to use me:\n\n"
-            "• Send me a video URL and I'll ask which quality you want.\n"
+            "• Send me a link and I'll ask which quality you want.\n"
             "• Choose <b>Video</b>, <b>Audio</b> or <b>Thumbnail</b>.\n"
-            "• <b>/playlist</b> &lt;url&gt; — download up to 10 items of a playlist.\n"
+            "• <b>/playlist</b> &lt;url&gt; — download up to {playlist} items of a playlist.\n"
+            "• <b>/tutorial</b> — full guide: abilities and limits.\n"
             "• <b>/language</b> — switch language.\n"
             "• <b>/settings</b> — choose how subtitles are delivered.\n"
             "• Inline mode: type @{botname} + a URL in any chat.\n\n"
-            "Sources: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest, SoundCloud, and more."
+            "Sources: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, "
+            "Pinterest, SoundCloud, Spotify (matched), podcasts, and more."
         ),
+        "tutorial": (
+            "📖 <b>Guide — what I can do</b>\n\n"
+            "① <b>Send a link</b>\n"
+            "Paste a video/audio URL and pick <b>Video</b> (choose quality), "
+            "<b>Audio</b> (MP3/M4A) or <b>Cover</b>. Works in this chat and inline "
+            "(@{botname} + a URL in any chat).\n\n"
+            "② <b>Subtitles</b>\n"
+            "When the source has captions you can add them and pick how to deliver:\n"
+            "• <b>Burned-in</b> — text baked into the picture (visible everywhere).\n"
+            "• <b>Embedded</b> — a toggleable subtitle track.\n"
+            "• <b>.srt</b> — a separate subtitle file.\n"
+            "Set the default with /settings. For videos longer than {burn_min} minutes, "
+            "burned-in mode asks you to pick a window of up to {burn_min} minutes.\n\n"
+            "③ <b>Playlists &amp; galleries</b>\n"
+            "/playlist &lt;url&gt; downloads up to {playlist} items. Instagram/TikTok "
+            "carousels are sent as media groups.\n\n"
+            "④ <b>Spotify &amp; podcasts</b>\n"
+            "A Spotify track is matched to a downloadable copy (Spotify audio itself is "
+            "DRM-protected and never downloaded). Podcast episodes are fetched from the "
+            "publisher's feed when available.\n\n"
+            "⑤ <b>Big files</b>\n"
+            "Files up to {upload_mb} MB are sent directly. Larger ones come back as a "
+            "temporary download link (valid {link_hours} h).\n\n"
+            "⚠️ <b>Limits</b>\n"
+            "• Length: up to {max_min} minutes per video.\n"
+            "• One download at a time; {cooldown} s between requests; {daily} per day.\n"
+            "• Playlists: max {playlist} items.\n"
+            "• Burned-in subtitles on long videos: max {burn_min} minutes.\n\n"
+            "💡 <b>Tips</b>\n"
+            "• YouTube may ask to \"confirm you're not a bot\" from datacenter IPs.\n"
+            "• Some sites need a login (private/age-restricted posts may fail).\n"
+            "• Available qualities and subtitles depend on the source.\n"
+            "• Links to private/internal addresses are blocked for safety.\n\n"
+            "❕ Respect copyright and each site's terms of service."
+        ),
+        "button_tutorial": "📖 Tutorial",
+        "button_language": "🌐 Language",
+        "button_settings": "⚙️ Settings",
         "choose_language": "Please choose your language:",
         "language_set": "Language set to {lang}.",
         "unknown_command": "Unknown command. Use /help to see what I can do.",
@@ -235,22 +277,65 @@ _STRINGS: dict[str, dict[str, str]] = {
     DE: {
         "start": (
             "Hallo {name}! 👋\n\n"
-            "Ich lade Videos und Audiodateien von YouTube, Instagram, TikTok, X/Twitter, "
-            "Facebook, Reddit, Vimeo, Pinterest, SoundCloud und vielen weiteren Seiten herunter.\n\n"
-            "Schick mir einfach einen Link.\n\n"
+            "Schick mir einen Link und ich lade das <b>Video</b>, die <b>Audiodatei</b> "
+            "oder das <b>Cover-Bild</b> herunter — von YouTube, Instagram, TikTok, "
+            "X/Twitter, Facebook, Reddit, Vimeo, Pinterest, SoundCloud und vielen "
+            "weiteren Seiten.\n\n"
+            "Ich kann auch <b>Untertitel</b> hinzufügen und <b>Playlists</b> laden.\n\n"
+            "Neu hier? Tippe auf <b>📖 Anleitung</b>, um alles zu sehen, was ich kann, "
+            "und wo meine Grenzen liegen.\n\n"
             "❕ Hinweis: Du bist dafür verantwortlich, das Urheberrecht der Inhalte und die "
             "Nutzungsbedingungen der jeweiligen Seite zu respektieren."
         ),
         "help": (
             "So benutzt du mich:\n\n"
-            "• Schick mir eine Video-URL und ich frage nach der gewünschten Qualität.\n"
+            "• Schick mir eine URL und ich frage nach der gewünschten Qualität.\n"
             "• Wähle <b>Video</b>, <b>Audio</b> oder <b>Cover-Bild</b>.\n"
-            "• <b>/playlist</b> &lt;url&gt; — lade bis zu 10 Elemente einer Playlist.\n"
+            "• <b>/playlist</b> &lt;url&gt; — lade bis zu {playlist} Elemente einer Playlist.\n"
+            "• <b>/tutorial</b> — vollständige Anleitung: Funktionen und Grenzen.\n"
             "• <b>/language</b> — Sprache ändern.\n"
             "• <b>/settings</b> — festlegen, wie Untertitel bereitgestellt werden.\n"
             "• Inline-Modus: tippe @{botname} + eine URL in einen beliebigen Chat.\n\n"
             "Quellen: YouTube, Instagram, TikTok, X/Twitter, Facebook, Reddit, Vimeo, Pinterest, SoundCloud u. v. m."
         ),
+        "tutorial": (
+            "📖 <b>Anleitung — was ich kann</b>\n\n"
+            "① <b>Link senden</b>\n"
+            "Füge eine Video-/Audio-URL ein und wähle <b>Video</b> (Qualität wählen), "
+            "<b>Audio</b> (MP3/M4A) oder <b>Cover</b>. Funktioniert im Chat und im "
+            "Inline-Modus (@{botname} + URL in einem beliebigen Chat).\n\n"
+            "② <b>Untertitel</b>\n"
+            "Wenn Untertitel vorhanden sind, kannst du sie hinzufügen und die Ausgabe wählen:\n"
+            "• <b>Eingebrannt</b> — Text fest im Bild (überall sichtbar).\n"
+            "• <b>Eingebettet</b> — zuschaltbare Untertitelspur.\n"
+            "• <b>.srt</b> — separate Untertiteldatei.\n"
+            "Lege den Standard mit /settings fest. Bei Videos über {burn_min} Minuten "
+            "fragt der eingebrannte Modus nach einem Ausschnitt von bis zu {burn_min} Minuten.\n\n"
+            "③ <b>Playlists & Galerien</b>\n"
+            "/playlist &lt;url&gt; lädt bis zu {playlist} Elemente. Instagram-/TikTok-"
+            "Karussells kommen als Mediengruppe.\n\n"
+            "④ <b>Spotify & Podcasts</b>\n"
+            "Ein Spotify-Titel wird einer herunterladbaren Kopie zugeordnet (Spotify-Audio "
+            "selbst ist DRM-geschützt und wird nie geladen). Podcast-Folgen werden, wenn "
+            "möglich, vom Feed des Publishers geladen.\n\n"
+            "⑤ <b>Große Dateien</b>\n"
+            "Dateien bis {upload_mb} MB werden direkt gesendet. Größere kommen als zeitlich "
+            "begrenzter Download-Link ({link_hours} h gültig).\n\n"
+            "⚠️ <b>Grenzen</b>\n"
+            "• Länge: bis zu {max_min} Minuten pro Video.\n"
+            "• Ein Download gleichzeitig; {cooldown} s zwischen Anfragen; {daily} pro Tag.\n"
+            "• Playlists: max. {playlist} Elemente.\n"
+            "• Eingebrannte Untertitel bei langen Videos: max. {burn_min} Minuten.\n\n"
+            "💡 <b>Tipps</b>\n"
+            "• YouTube kann von Rechenzentrums-IPs aus „Bestätige, dass du kein Bot bist“ verlangen.\n"
+            "• Manche Seiten brauchen einen Login (private/altersbeschränkte Beiträge scheitern ggf.).\n"
+            "• Verfügbare Qualitäten und Untertitel hängen von der Quelle ab.\n"
+            "• Links auf private/interne Adressen sind aus Sicherheitsgründen blockiert.\n\n"
+            "❕ Respektiere Urheberrecht und Nutzungsbedingungen der jeweiligen Seite."
+        ),
+        "button_tutorial": "📖 Anleitung",
+        "button_language": "🌐 Sprache",
+        "button_settings": "⚙️ Einstellungen",
         "choose_language": "Bitte wähle deine Sprache:",
         "language_set": "Sprache auf {lang} gesetzt.",
         "unknown_command": "Unbekannter Befehl. Nutze /help, um zu sehen, was ich kann.",
@@ -451,21 +536,61 @@ _STRINGS: dict[str, dict[str, str]] = {
     FA: {
         "start": (
             "سلام {name}! 👋\n\n"
-            "من ویدیو و صدا از یوتیوب، اینستاگرام، تیک‌تاک، ایکس/توییتر، فیس‌بوک، "
-            "ردیت، ویمیو، پینترست، ساندکلود و بسیاری از سایت‌های دیگر دانلود می‌کنم.\n\n"
-            "فقط یک لینک برایم بفرستید.\n\n"
+            "یک لینک برایم بفرست تا <b>ویدیو</b>، <b>صدا</b> یا <b>تصویر جلد</b> را "
+            "دانلود کنم — از یوتیوب، اینستاگرام، تیک‌تاک، ایکس/توییتر، فیس‌بوک، "
+            "ردیت، ویمیو، پینترست، ساندکلود و بسیاری سایت‌های دیگر.\n\n"
+            "می‌توانم <b>زیرنویس</b> هم اضافه کنم و <b>پلی‌لیست</b> دانلود کنم.\n\n"
+            "تازه‌وارد شده‌اید؟ روی <b>📖 آموزش</b> بزنید تا همهٔ امکانات و محدودیت‌هایم را ببینید.\n\n"
             "❕ یادآوری: شما مسئول رعایت کپی‌رایت محتوا و شرایط استفاده از هر سایت هستید."
         ),
         "help": (
             "نحوه استفاده:\n\n"
-            "• یک لینک ویدیو بفرستید تا کیفیت موردنظر را بپرسم.\n"
+            "• یک لینک بفرستید تا کیفیت موردنظر را بپرسم.\n"
             "• <b>ویدیو</b>، <b>صدا</b> یا <b>جلد</b> را انتخاب کنید.\n"
-            "• <b>/playlist</b> &lt;url&gt; — دانلود تا ۱۰ مورد از یک پلی‌لیست.\n"
+            "• <b>/playlist</b> &lt;url&gt; — دانلود تا {playlist} مورد از یک پلی‌لیست.\n"
+            "• <b>/tutorial</b> — راهنمای کامل: امکانات و محدودیت‌ها.\n"
             "• <b>/language</b> — تغییر زبان.\n"
             "• <b>/settings</b> — انتخاب روش ارائه زیرنویس.\n"
             "• حالت اینلاین: در هر چتی @{botname} و سپس یک URL بنویسید.\n\n"
             "منابع: یوتیوب، اینستاگرام، تیک‌تاک، ایکس/توییتر، فیس‌بوک، ردیت، ویمیو، پینترست، ساندکلود و بیشتر."
         ),
+        "tutorial": (
+            "📖 <b>آموزش — چه کارهایی می‌توانم انجام دهم</b>\n\n"
+            "① <b>ارسال لینک</b>\n"
+            "یک URL بفرستید و <b>ویدیو</b> (با انتخاب کیفیت)، <b>صدا</b> (MP3/M4A) یا "
+            "<b>جلد</b> را انتخاب کنید. در چت و حالت اینلاین (@{botname} + URL در هر چت) کار می‌کند.\n\n"
+            "② <b>زیرنویس</b>\n"
+            "اگر ویدیو زیرنویس داشته باشد می‌توانید اضافه کنید و روش ارائه را انتخاب کنید:\n"
+            "• <b>سوخته (Burned-in)</b> — متن روی تصویر حک می‌شود.\n"
+            "• <b>جاسازی‌شده (Embedded)</b> — مسیر زیرنویس قابل روشن/خاموش کردن.\n"
+            "• <b>.srt</b> — فایل زیرنویس جداگانه.\n"
+            "حالت پیش‌فرض را با /settings تنظیم کنید. برای ویدیوهای بلندتر از {burn_min} دقیقه، "
+            "حالت سوخته یک بازهٔ حداکثر {burn_min} دقیقه‌ای از شما می‌پرسد.\n\n"
+            "③ <b>پلی‌لیست‌ها و گالری‌ها</b>\n"
+            "/playlist &lt;url&gt; تا {playlist} مورد دانلود می‌کند. کاروسل‌های اینستاگرام/"
+            "تیک‌تاک به‌صورت گروه رسانه ارسال می‌شوند.\n\n"
+            "④ <b>اسپاتیفای و پادکست</b>\n"
+            "آهنگ اسپاتیفای با یک نسخهٔ قابل‌دانلود تطبیق داده می‌شود (صدای خود اسپاتیفای "
+            "با DRM محافظت می‌شود و هرگز دانلود نمی‌شود). قسمت‌های پادکست در صورت وجود از "
+            "فید ناشر دریافت می‌شوند.\n\n"
+            "⑤ <b>فایل‌های بزرگ</b>\n"
+            "فایل‌های تا {upload_mb} مگابایت مستقیم ارسال می‌شوند. بزرگ‌ترها به‌صورت لینک "
+            "دانلود موقت (اعتبار {link_hours} ساعت) ارائه می‌شوند.\n\n"
+            "⚠️ <b>محدودیت‌ها</b>\n"
+            "• طول: حداکثر {max_min} دقیقه برای هر ویدیو.\n"
+            "• هر بار یک دانلود؛ {cooldown} ثانیه بین درخواست‌ها؛ {daily} در روز.\n"
+            "• پلی‌لیست: حداکثر {playlist} مورد.\n"
+            "• زیرنویس سوخته برای ویدیوهای بلند: حداکثر {burn_min} دقیقه.\n\n"
+            "💡 <b>نکته‌ها</b>\n"
+            "• یوتیوب ممکن است از IP سرورها بخواهد تأیید کنید که ربات نیستید.\n"
+            "• برخی سایت‌ها نیاز به ورود دارند (پست‌های خصوصی/محدود ممکن است ناموفق باشند).\n"
+            "• کیفیت‌ها و زیرنویس‌های موجود به منبع بستگی دارد.\n"
+            "• لینک‌های آدرس‌های خصوصی/داخلی برای امنیت مسدود می‌شوند.\n\n"
+            "❕ کپی‌رایت و شرایط استفادهٔ هر سایت را رعایت کنید."
+        ),
+        "button_tutorial": "📖 آموزش",
+        "button_language": "🌐 زبان",
+        "button_settings": "⚙️ تنظیمات",
         "choose_language": "لطفاً زبان خود را انتخاب کنید:",
         "language_set": "زبان به {lang} تغییر کرد.",
         "unknown_command": "دستور ناشناخته است. برای دیدن امکانات از /help استفاده کنید.",

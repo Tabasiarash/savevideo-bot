@@ -15,6 +15,33 @@ async def test_cmd_start_greets(services, bot, make_message):
     msg = make_message(text="/start")
     await start.cmd_start(msg, _command(), bot)
     assert msg.sent and "Hi" in msg.sent[0]
+    data = [b.callback_data for row in msg.markups[-1].inline_keyboard for b in row]
+    assert "menu:tutorial" in data
+    assert "menu:lang" in data
+
+
+async def test_cmd_start_shows_settings_button_when_subtitles_enabled(services, bot, make_message, settings, monkeypatch):
+    monkeypatch.setattr(settings, "enable_subtitles", True, raising=False)
+    msg = make_message(text="/start")
+    await start.cmd_start(msg, _command(), bot)
+    data = [b.callback_data for row in msg.markups[-1].inline_keyboard for b in row]
+    assert "menu:settings" in data
+
+
+async def test_cmd_tutorial(services, bot, make_message):
+    msg = make_message(text="/tutorial")
+    await start.cmd_tutorial(msg, bot)
+    assert msg.sent and "Guide" in msg.sent[0]
+
+
+async def test_on_menu_callbacks(services, bot, make_callback):
+    cb_tut = make_callback(data="menu:tutorial")
+    await start.on_menu_tutorial(cb_tut, bot)
+    assert cb_tut.message.sent and "Guide" in cb_tut.message.sent[0]
+
+    cb_lang = make_callback(data="menu:lang")
+    await start.on_menu_language(cb_lang)
+    assert cb_lang.message.sent and "choose your language" in cb_lang.message.sent[0].lower()
 
 
 async def test_cmd_start_banned(services, bot, make_message):
