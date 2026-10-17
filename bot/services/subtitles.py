@@ -409,8 +409,9 @@ def build_burn_args(
     else:
         args += ["-crf", "23"]
     args += ["-threads", str(max(1, settings.subtitle_threads))]
-    # A seek resets timestamps, so copy would risk A/V drift; re-encode instead.
-    args += ["-c:a", "aac" if seek_s > 0 else "copy"]
+    # A window burn can start from a container with an exotic audio codec; a plain
+    # burn keeps the existing track (copy), a seek/window re-encodes to aac.
+    args += ["-c:a", "aac" if (seek_s > 0 or duration_s > 0) else "copy"]
     if duration_s > 0:
         args += ["-t", f"{duration_s:.3f}"]
     args += ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(out)]
