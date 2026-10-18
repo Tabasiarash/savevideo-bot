@@ -367,14 +367,34 @@ async def test_collection_select_tracks(services, make_message, monkeypatch, set
         kind="album", spotify_id="album1", name="Test Album", artist_or_owner="Test Artist", total=3
     )
 
+    track_metas = [
+        spotify.metadata.TrackMeta(
+            spotify_id=f"id{n}",
+            kind="track",
+            title=f"Song {n}",
+            artists=[f"Artist {n}"],
+            duration_s=200.0,
+        )
+        for n in range(3)
+    ]
+
     async def fake_list(*args, **kwargs):
         return refs
 
     async def fake_meta(*args, **kwargs):
         return collection
 
+    async def fake_track_meta(*args, **kwargs):
+        # args[0] is db, args[1] is the SpotifyRef
+        ref = args[1] if len(args) > 1 else None
+        for m in track_metas:
+            if ref and m.spotify_id == ref.id:
+                return m
+        return track_metas[0]
+
     monkeypatch.setattr(spotify.metadata, "list_collection_tracks", fake_list)
     monkeypatch.setattr(spotify.metadata, "fetch_collection_meta", fake_meta)
+    monkeypatch.setattr(spotify.metadata, "fetch_metadata", fake_track_meta)
 
     msg = make_message(text=ALBUM_URL)
     await spotify.on_spotify_message(msg, services.bot)
@@ -383,6 +403,10 @@ async def test_collection_select_tracks(services, make_message, monkeypatch, set
     assert get_text("en", "spotify_select_tracks", title="Test Album", artist="Test Artist",
                     selected=0, total=3, page=1, pages=1) in msg.edits
     markup = msg.markups[-1]
+    labels = [btn.text for row in markup.inline_keyboard for btn in row]
+    assert "Song 0" in labels[0]
+    assert "Song 1" in labels[1]
+    assert "Song 2" in labels[2]
     cbs = [btn.callback_data for row in markup.inline_keyboard for btn in row]
     assert f"sp:sel:album:{TRACK_ID}:0:0" in cbs
     assert f"sp:sel:album:{TRACK_ID}:0:1" in cbs

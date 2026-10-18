@@ -116,6 +116,9 @@ class _CollectionState:
     # ZIP download control flags.
     zip_cancelled: bool = False
     zip_pause_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Track index -> display title ("Artist — Title"), fetched upfront so the
+    # selection keyboard shows real song names instead of raw Spotify IDs.
+    titles: dict[int, str] = field(default_factory=dict)
 
     def is_expired(self) -> bool:
         return (time.time() - self.created_at) > links.PENDING_TTL_S
@@ -650,6 +653,18 @@ async def _present(state: _MatchState, candidate: matcher.Candidate) -> None:
 
     await links.edit_message(message=state.status_message, body=body, reply_markup=kb)
 
+
+def _track_display_title(meta: metadata.TrackMeta | None) -> str:
+    """Build a display title for a track: ``Artist — Title`` or just ``Title``."""
+    if not meta or not meta.title:
+        return ""
+    artist = meta.artist_line()
+    title = meta.title
+    if artist:
+        return f"{artist} — {title}"
+    return title
+
+
 async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status: Message) -> None:
     srv = get_services()
     user = message.from_user
@@ -687,6 +702,25 @@ async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status:
         await links.edit_message(message=status, body=text(lang, "spotify_no_metadata"))
         return
 
+    # Fetch track titles upfront so the selection keyboard shows real song
+    # names instead of raw Spotify IDs. Metadata is cached 24h by the DB, so
+    # re-opening the same playlist is instant.
+    title_results = await asyncio.gather(
+        *[metadata.fetch_metadata(
+            srv.db,
+            r,
+            proxy=settings.proxy_for_spotify(),
+            client_id=settings.spotify_client_id,
+            client_secret=settings.spotify_client_secret,
+        ) for r in refs],
+        return_exceptions=True,
+    )
+    titles: dict[int, str] = {}
+    for idx, result in enumerate(title_results):
+        if isinstance(result, Exception) or result is None or not result.is_usable():
+            continue
+        titles[idx] = _track_display_title(result)
+
     tmpdir = links.make_tmpdir(user.id)
     state = _CollectionState(
         user_id=user.id,
@@ -696,6 +730,7 @@ async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status:
         tmpdir=tmpdir,
         lang=lang,
         status_message=status,
+        titles=titles,
     )
     _collection_state[user.id] = state
 
@@ -716,7 +751,7 @@ def _selection_keyboard(state: _CollectionState) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for idx in range(start, end):
         ref = refs[idx]
-        label = ref.id[:40]  # fallback if meta not yet fetched
+        label = state.titles.get(idx) or ref.id[:40]
         # Try to get a nicer title from collection meta? We only have refs here.
         is_sel = idx in selected
         mark = "✅" if is_sel else "⬜"
