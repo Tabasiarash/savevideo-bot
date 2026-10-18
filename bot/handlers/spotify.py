@@ -1138,16 +1138,16 @@ async def _download_collection_zip(message: Message, bot: Bot, state: _Collectio
 
             # Refresh progress after each batch (avoids flooding Telegram).
             async with counter_lock:
-                current_ok = ok
+                current_done = ok + fail
                 current_total = total
+                pct = round(current_done / current_total * 100) if current_total else 0
 
             await links.edit_message(
                 message=message,
                 body=text(
                     lang,
                     "spotify_zip_building",
-                    ok=current_ok,
-                    total=current_total,
+                    pct=pct,
                 ),
                 reply_markup=_zip_control_keyboard(
                     lang, paused=not state.zip_pause_event.is_set(), kind=state.ref.kind, id_=state.ref.id
