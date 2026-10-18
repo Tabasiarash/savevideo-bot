@@ -215,6 +215,15 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
         ),
         "spotify_collection_found": "🎵 This collection has {count} items; processing up to {max}.",
+        "spotify_collection_pick": (
+            "🎵 <b>{title}</b>\n👤 {artist}\n\n"
+            "This collection contains {count} tracks. Choose how to download:"
+        ),
+        "button_spotify_zip": "📦 Download as ZIP",
+        "button_spotify_individual": "🎵 Send individually",
+        "spotify_zip_building": "📦 Building ZIP: downloaded {ok}/{total} tracks...",
+        "spotify_zip_done": "✅ ZIP created: {title}.zip ({count} tracks, {size_mb} MB). Sending...",
+        "spotify_zip_failed": "❌ Could not create ZIP file (all downloads failed).",
         "spotify_collection_done": "✅ Done: {ok} track(s) sent, {fail} failed.",
         "spotify_match_source": "🔗 Matched on {source}.",
         "podcast_disabled": (
@@ -473,6 +482,15 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
         ),
         "spotify_collection_found": "🎵 Diese Sammlung hat {count} Elemente; es werden bis zu {max} verarbeitet.",
+        "spotify_collection_pick": (
+            "🎵 <b>{title}</b>\n👤 {artist}\n\n"
+            "Diese Sammlung enthält {count} Titel. Wähle eine Download-Methode:"
+        ),
+        "button_spotify_zip": "📦 Als ZIP herunterladen",
+        "button_spotify_individual": "🎵 Einzeln senden",
+        "spotify_zip_building": "📦 ZIP wird erstellt: {ok}/{total} Titel heruntergeladen...",
+        "spotify_zip_done": "✅ ZIP erstellt: {title}.zip ({count} Titel, {size_mb} MB). Wird gesendet...",
+        "spotify_zip_failed": "❌ ZIP konnte nicht erstellt werden (alle Downloads fehlgeschlagen).",
         "spotify_collection_done": "✅ Fertig: {ok} Titel gesendet, {fail} fehlgeschlagen.",
         "spotify_match_source": "🔗 Zugeordnet auf {source}.",
         "podcast_disabled": (
@@ -727,6 +745,15 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
         ),
         "spotify_collection_found": "🎵 این مجموعه {count} مورد دارد؛ تا {max} مورد پردازش می‌شود.",
+        "spotify_collection_pick": (
+            "🎵 <b>{title}</b>\n👤 {artist}\n\n"
+            "این مجموعه شامل {count} آهنگ است. روش دانلود را انتخاب کنید:"
+        ),
+        "button_spotify_zip": "📦 دانلود به صورت ZIP",
+        "button_spotify_individual": "🎵 ارسال تکی آهنگ‌ها",
+        "spotify_zip_building": "📦 در حال ساخت فایل ZIP: {ok} از {total} آهنگ دانلود شد...",
+        "spotify_zip_done": "✅ فایل ZIP ساخته شد: {title}.zip ({count} آهنگ، {size_mb} مگابایت). در حال ارسال...",
+        "spotify_zip_failed": "❌ ساخت فایل ZIP ممکن نشد (تمام دانلودها ناموفق بود).",
         "spotify_collection_done": "✅ انجام شد: {ok} آهنگ ارسال شد، {fail} ناموفق.",
         "spotify_match_source": "🔗 در {source} تطبیق داده شد.",
         "podcast_disabled": (

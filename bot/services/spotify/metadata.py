@@ -293,6 +293,137 @@ def _entry_to_ref(kind: str, entry: dict) -> SpotifyRef | None:
     return SpotifyRef(str(item_kind), str(sid), f"https://{OPEN_HOST}/{item_kind}/{sid}")
 
 
+@dataclass
+class CollectionMeta:
+    """Metadata for a Spotify collection (album/playlist/artist/show)."""
+
+    kind: str
+    spotify_id: str
+    name: str | None = None
+    artist_or_owner: str | None = None
+    cover_url: str | None = None
+    total: int | None = None
+
+
+async def fetch_collection_meta(
+    ref: SpotifyRef,
+    *,
+    proxy: str | None = None,
+    client_id: str = "",
+    client_secret: str = "",
+) -> CollectionMeta | None:
+    """Fetch collection-level metadata (name, cover, track count) via Web API.
+
+    Returns ``None`` when credentials are missing or the API rejects the request.
+    """
+    if not (client_id and client_secret):
+        return None
+    token = await _api_token(client_id, client_secret, proxy)
+    if not token:
+        return None
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if ref.kind == "album":
+        resp = await fetch(
+            f"{_API_BASE}/albums/{ref.id}",
+            proxy=proxy,
+            allow_redirects=True,
+            is_allowed=is_spotify_api,
+            headers=headers,
+        )
+        if resp.status != 200:
+            return None
+        try:
+            data = json.loads(resp.text)
+        except (TypeError, ValueError):
+            return None
+        images = data.get("images") or []
+        artists = [a.get("name") for a in data.get("artists") or [] if a.get("name")]
+        return CollectionMeta(
+            kind="album",
+            spotify_id=ref.id,
+            name=data.get("name"),
+            artist_or_owner=", ".join(artists) or None,
+            cover_url=images[0].get("url") if images else None,
+            total=data.get("total_tracks"),
+        )
+
+    if ref.kind == "playlist":
+        resp = await fetch(
+            f"{_API_BASE}/playlists/{ref.id}",
+            proxy=proxy,
+            allow_redirects=True,
+            is_allowed=is_spotify_api,
+            headers=headers,
+        )
+        if resp.status != 200:
+            return None
+        try:
+            data = json.loads(resp.text)
+        except (TypeError, ValueError):
+            return None
+        images = data.get("images") or []
+        owner = data.get("owner") or {}
+        return CollectionMeta(
+            kind="playlist",
+            spotify_id=ref.id,
+            name=data.get("name"),
+            artist_or_owner=owner.get("display_name") or None,
+            cover_url=images[0].get("url") if images else None,
+            total=(data.get("tracks") or {}).get("total"),
+        )
+
+    if ref.kind == "artist":
+        resp = await fetch(
+            f"{_API_BASE}/artists/{ref.id}",
+            proxy=proxy,
+            allow_redirects=True,
+            is_allowed=is_spotify_api,
+            headers=headers,
+        )
+        if resp.status != 200:
+            return None
+        try:
+            data = json.loads(resp.text)
+        except (TypeError, ValueError):
+            return None
+        images = data.get("images") or []
+        return CollectionMeta(
+            kind="artist",
+            spotify_id=ref.id,
+            name=data.get("name"),
+            artist_or_owner=None,
+            cover_url=images[0].get("url") if images else None,
+            total=None,
+        )
+
+    if ref.kind == "show":
+        resp = await fetch(
+            f"{_API_BASE}/shows/{ref.id}",
+            proxy=proxy,
+            allow_redirects=True,
+            is_allowed=is_spotify_api,
+            headers=headers,
+        )
+        if resp.status != 200:
+            return None
+        try:
+            data = json.loads(resp.text)
+        except (TypeError, ValueError):
+            return None
+        images = data.get("images") or []
+        return CollectionMeta(
+            kind="show",
+            spotify_id=ref.id,
+            name=data.get("name"),
+            artist_or_owner=data.get("publisher"),
+            cover_url=images[0].get("url") if images else None,
+            total=(data.get("episodes") or {}).get("total"),
+        )
+
+    return None
+
+
 async def list_collection_tracks(
     db,
     ref: SpotifyRef,

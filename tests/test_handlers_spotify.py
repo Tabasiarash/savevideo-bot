@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from bot.db import url_hash
 from bot.handlers import links, spotify
 from bot.i18n import get_text
@@ -361,30 +363,143 @@ async def test_collection_expands_and_downloads(services, make_message, monkeypa
     )
 
     refs = [SpotifyRef("track", f"id{n}", f"https://open.spotify.com/track/id{n}") for n in range(2)]
+    collection = spotify.metadata.CollectionMeta(
+        kind="album", spotify_id="album1", name="Test Album", artist_or_owner="Test Artist", total=2
+    )
 
     async def fake_list(*args, **kwargs):
         return refs
 
     async def fake_meta(*args, **kwargs):
+        return collection
+
+    async def fake_track_meta(*args, **kwargs):
         return META
 
     async def fake_match(*args, **kwargs):
         cand = matcher.Candidate("https://youtu.be/good", "Never Gonna Give You Up", "Rick Astley", 213.0, "youtube", 0.99)
         return matcher.MatchResult(cand, ["youtube"], 0.99)
 
-    calls: list[str] = []
-
-    async def fake_download_flow(bot, flow, fmt, user_id):
-        calls.append(fmt)
-        return "ok"
-
     monkeypatch.setattr(spotify.metadata, "list_collection_tracks", fake_list)
-    monkeypatch.setattr(spotify.metadata, "fetch_metadata", fake_meta)
+    monkeypatch.setattr(spotify.metadata, "fetch_collection_meta", fake_meta)
+    monkeypatch.setattr(spotify.metadata, "fetch_metadata", fake_track_meta)
     monkeypatch.setattr(spotify.matcher, "find_match", fake_match)
-    monkeypatch.setattr(links, "download_flow", fake_download_flow)
 
     msg = make_message(text=ALBUM_URL)
     await spotify.on_spotify_message(msg, services.bot)
 
-    assert calls == ["audio_mp3", "audio_mp3"]
-    assert get_text("en", "spotify_collection_done", ok=2, fail=0) in msg.sent
+    # Should show the choice menu, not immediately download.
+    assert get_text("en", "spotify_collection_pick", title="Test Album", artist="Test Artist", count=2) in msg.edits
+    markup = msg.markups[-1]
+    cbs = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+    assert "sp:zip:album:4uLU6hMCjMI75M1A2tKUQC" in cbs
+    assert "sp:ind:album:4uLU6hMCjMI75M1A2tKUQC" in cbs
+
+    # State should be stored for the callback.
+    from tests.conftest import USER_ID
+    assert USER_ID in spotify._collection_state
+    state = spotify._collection_state[USER_ID]
+    assert state.ref.id == "4uLU6hMCjMI75M1A2tKUQC"
+    assert len(state.refs) == 2
+
+
+async def test_collection_zip_download(services, make_message, monkeypatch, settings):
+    _enable(
+        monkeypatch,
+        settings,
+        spotify_enable_collections=True,
+        spotify_client_id="cid",
+        spotify_client_secret="sec",
+        spotify_max_items=3,
+    )
+
+    refs = [SpotifyRef("track", "id1", "https://open.spotify.com/track/id1")]
+    collection = spotify.metadata.CollectionMeta(
+        kind="album", spotify_id="album1", name="Test Album", artist_or_owner="Test Artist", total=1
+    )
+
+    # Prime the collection state with a pre-downloaded track file.
+    from tests.conftest import USER_ID
+    tmpdir = settings.temp_dir_resolved / f"zip_test_{int(time.time()*1000)}"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    track_file = tmpdir / "01 - Test Artist - Never Gonna Give You Up.mp3"
+    track_file.write_bytes(b"fake-audio-data")
+
+    collection_ref = SpotifyRef("album", "album1", "https://open.spotify.com/album/album1")
+    spotify._collection_state[USER_ID] = spotify._CollectionState(
+        user_id=USER_ID,
+        ref=collection_ref,
+        meta=collection,
+        refs=refs,
+        tmpdir=tmpdir,
+        lang="en",
+        status_message=make_message(),
+    )
+
+    # Mock _download_one_track to return the pre-created file.
+    async def fake_download_one(srv, track_ref, td, lang, index):
+        return track_file
+
+    monkeypatch.setattr(spotify, "_download_one_track", fake_download_one)
+
+    cb_msg = make_message()
+    cb = type("CB", (), {"data": "sp:zip:album:album1", "from_user": make_message().from_user, "message": cb_msg, "answers": []})()
+    async def fake_answer(*a, **k):
+        cb.answers.append(a)
+    cb.answer = fake_answer
+
+    await spotify._on_collection_zip(cb, services.bot)
+
+    # A ZIP file should have been sent via the bot.
+    assert len(services.bot.documents) == 1
+    sent_chat, sent_file, _ = services.bot.documents[0]
+    assert sent_chat == USER_ID
+    assert "Test Album" in str(sent_file.path)
+
+
+async def test_collection_zip_download_no_tracks(services, make_message, monkeypatch, settings):
+    _enable(
+        monkeypatch,
+        settings,
+        spotify_enable_collections=True,
+        spotify_client_id="cid",
+        spotify_client_secret="sec",
+        spotify_max_items=3,
+    )
+
+    refs = [SpotifyRef("track", "id1", "https://open.spotify.com/track/id1")]
+    collection = spotify.metadata.CollectionMeta(
+        kind="album", spotify_id="album1", name="Test Album", artist_or_owner="Test Artist", total=1
+    )
+
+    async def fake_list(*args, **kwargs):
+        return refs
+
+    async def fake_meta(*args, **kwargs):
+        return collection
+
+    async def fake_track_meta_none(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(spotify.metadata, "list_collection_tracks", fake_list)
+    monkeypatch.setattr(spotify.metadata, "fetch_collection_meta", fake_meta)
+    monkeypatch.setattr(spotify.metadata, "fetch_metadata", fake_track_meta_none)
+
+    msg = make_message(text=ALBUM_URL)
+    await spotify.on_spotify_message(msg, services.bot)
+
+    assert get_text("en", "spotify_collection_pick", title="Test Album", artist="Test Artist", count=1) in msg.edits
+
+    from tests.conftest import USER_ID
+    spotify._collection_state[USER_ID]
+
+    # No matches available → ZIP should fail.
+    cb_msg = make_message()
+    cb = type("CB", (), {"data": f"sp:zip:album:{TRACK_ID}", "from_user": make_message().from_user, "message": cb_msg, "answers": []})()
+    async def fake_answer(*a, **k):
+        cb.answers.append(a)
+    cb.answer = fake_answer
+
+    await spotify._on_collection_zip(cb, services.bot)
+
+    assert any("failed" in a[0] for a in cb.answers if a) or any("ZIP" in e for e in cb_msg.edits)

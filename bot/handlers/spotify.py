@@ -21,13 +21,21 @@ matched track is then downloaded and sent in turn.
 from __future__ import annotations
 
 import logging
+import re
 import time
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from bot.config import settings
 from bot.db import url_hash
@@ -36,9 +44,9 @@ from bot.handlers import links
 from bot.handlers.common import is_banned, register_user, text
 from bot.services import podcast, tagger
 from bot.services.breaker import Breaker
-from bot.services.downloader import cleanup_dir
+from bot.services.downloader import DownloadJob, cleanup_dir
 from bot.services.spotify import matcher, metadata, urls
-from bot.utils import extract_urls, safe_display_url
+from bot.utils import extract_urls, safe_display_url, sanitize_filename
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +60,10 @@ _AUDIO_SUFFIXES = tagger.SUPPORTED_SUFFIXES
 
 # Callback data for the "try another match" button.
 _REMATCH_PREFIX = "sp:rematch"
+
+# Callback data for Spotify collection delivery choice.
+_ZIP_PREFIX = "sp:zip"
+_INDIVIDUAL_PREFIX = "sp:ind"
 
 # How many candidates a single card may cycle through before the "try another
 # match" button is dropped, so a request cannot hammer the sources forever.
@@ -75,8 +87,28 @@ class _MatchState:
         return (time.time() - self.created_at) > links.PENDING_TTL_S
 
 
+@dataclass
+class _CollectionState:
+    """Context for a Spotify collection awaiting ZIP/individual delivery choice."""
+
+    user_id: int
+    ref: urls.SpotifyRef
+    meta: metadata.CollectionMeta | None
+    refs: list[urls.SpotifyRef]
+    tmpdir: Path
+    lang: str
+    status_message: Message
+    created_at: float = field(default_factory=time.time)
+
+    def is_expired(self) -> bool:
+        return (time.time() - self.created_at) > links.PENDING_TTL_S
+
+
 # At most one active Spotify match per user (rate limiting prevents overlap).
 _matches: dict[int, _MatchState] = {}
+
+# Pending Spotify collection states (track refs + metadata) awaiting ZIP/individual choice.
+_collection_state: dict[int, _CollectionState] = {}
 
 
 def first_spotify_url(value: str | None) -> str | None:
@@ -613,6 +645,14 @@ async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status:
         await links.edit_message(message=status, body=text(lang, "spotify_collection_needs_api"))
         return
 
+    # Fetch collection metadata (name, cover, artist/owner) for display.
+    collection = await metadata.fetch_collection_meta(
+        ref,
+        proxy=settings.proxy_for_spotify(),
+        client_id=settings.spotify_client_id,
+        client_secret=settings.spotify_client_secret,
+    )
+
     try:
         refs = await metadata.list_collection_tracks(
             srv.db,
@@ -630,54 +670,325 @@ async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status:
         await links.edit_message(message=status, body=text(lang, "spotify_no_metadata"))
         return
 
-    await links.edit_message(
-        message=status,
-        body=text(lang, "spotify_collection_found", count=len(refs), max=settings.spotify_max_items),
+    title = collection.name or ref.id
+    artist = collection.artist_or_owner or "?"
+    count = len(refs)
+
+    # Store the refs on the pending flow so the callback can retrieve them.
+    tmpdir = links.make_tmpdir(user.id)
+    flow = links.PendingFlow(
+        url=ref.canonical,
+        url_site="spotify",
+        info={"collection_refs": [r.id for r in refs]},
+        tmpdir=tmpdir,
+        title=title,
+        duration=0.0,
+        uploader=artist,
+        prefix="dl",
+        playlist_items=None,
+        lang=lang,
+        status_message=status,
+        cache_key=url_hash(f"spotify:collection:{ref.kind}:{ref.id}"),
+    )
+    links.remember_flow(user.id, flow)
+    _collection_state[user.id] = _CollectionState(
+        user_id=user.id,
+        ref=ref,
+        meta=collection,
+        refs=refs,
+        tmpdir=tmpdir,
+        lang=lang,
+        status_message=status,
     )
 
-    ok = 0
-    fail = 0
-    for track_ref in refs:
-        meta = await _fetch_meta(track_ref)
-        if meta is None or not meta.is_usable():
-            fail += 1
-            continue
-        tmpdir = links.make_tmpdir(user.id)
-        result = await _match(meta, tmpdir)
-        candidate = result.candidate
-        if candidate is None:
-            fail += 1
-            cleanup_dir(tmpdir)
-            continue
+    body = text(
+        lang,
+        "spotify_collection_pick",
+        title=title,
+        artist=artist,
+        count=count,
+    )
 
-        info = {
-            "id": track_ref.id,
-            "title": meta.title or candidate.title,
-            "uploader": meta.artist_line() or candidate.uploader,
-            "duration": meta.duration_s or candidate.duration or 0.0,
-        }
-        cover_path = tmpdir / "cover.jpg"
-        flow = links.PendingFlow(
-            url=candidate.url,
-            url_site=candidate.source,
-            info=info,
-            tmpdir=tmpdir,
-            title=meta.title or candidate.title,
-            duration=float(meta.duration_s or candidate.duration or 0.0),
-            uploader=meta.artist_line() or candidate.uploader,
-            prefix="dl",
-            playlist_items=None,
-            lang=lang,
-            status_message=None,
-            cache_key=url_hash(f"spotify:{track_ref.id}"),
-            audio_meta=_audio_meta(meta, cover_path),
-            postprocess=_make_postprocess(meta, cover_path),
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=text(lang, "button_spotify_zip"),
+                    callback_data=f"{_ZIP_PREFIX}:{ref.kind}:{ref.id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=text(lang, "button_spotify_individual"),
+                    callback_data=f"{_INDIVIDUAL_PREFIX}:{ref.kind}:{ref.id}",
+                ),
+            ],
+        ]
+    )
+    await links.edit_message(message=status, body=body, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith(_ZIP_PREFIX))
+async def _on_collection_zip(callback: CallbackQuery, bot: Bot) -> None:
+    """Download a Spotify collection as a single ZIP archive."""
+    await callback.answer()
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        return
+    kind = parts[2]
+    cid = parts[3]
+    user = callback.from_user
+    assert user is not None
+
+    srv = get_services()
+    lang = await srv.db.get_language(user.id) or settings.default_language
+
+    state = _collection_state.get(user.id)
+    if state is None or state.ref.id != cid or state.ref.kind != kind:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+
+    await _download_collection_zip(callback.message, bot, state, lang)
+
+
+@router.callback_query(F.data.startswith(_INDIVIDUAL_PREFIX))
+async def _on_collection_individual(callback: CallbackQuery, bot: Bot) -> None:
+    """Download each track of a Spotify collection individually."""
+    await callback.answer()
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        return
+    kind = parts[2]
+    cid = parts[3]
+    user = callback.from_user
+    assert user is not None
+
+    srv = get_services()
+    lang = await srv.db.get_language(user.id) or settings.default_language
+
+    state = _collection_state.get(user.id)
+    if state is None or state.ref.id != cid or state.ref.kind != kind:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+
+    await _download_collection_individual(callback.message, bot, state, lang)
+
+
+def _zip_name(collection: metadata.CollectionMeta | None, ref: urls.SpotifyRef) -> str:
+    """Build a safe ZIP filename from collection metadata."""
+    parts = []
+    if collection and collection.name:
+        parts.append(collection.name)
+    if collection and collection.artist_or_owner:
+        parts.append(collection.artist_or_owner)
+    if not parts:
+        parts.append(ref.id)
+    base = " - ".join(parts)
+    safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", base).strip()[:120] or ref.id
+    return f"{safe}.zip"
+
+
+async def _download_one_track(
+    srv,
+    track_ref: urls.SpotifyRef,
+    tmpdir: Path,
+    lang: str,
+    index: int,
+) -> Path | None:
+    """Download and tag one track for a ZIP batch; returns the file path or None."""
+    meta = await _fetch_meta(track_ref)
+    if meta is None or not meta.is_usable():
+        return None
+    track_tmpdir = tmpdir / f"track_{index}"
+    track_tmpdir.mkdir(parents=True, exist_ok=True)
+    result = await _match(meta, track_tmpdir)
+    candidate = result.candidate
+    if candidate is None:
+        cleanup_dir(track_tmpdir)
+        return None
+
+    job = DownloadJob(
+        url=candidate.url,
+        format_key="audio_mp3",
+        tmpdir=track_tmpdir,
+        title_hint=sanitize_filename(meta.title or candidate.title or "track") or "track",
+        audio_codec="mp3",
+    )
+    try:
+        await srv.runner.download(job)
+    except Exception:  # noqa: BLE001
+        log.info("spotify zip download failed for %s", track_ref.id, exc_info=True)
+        cleanup_dir(track_tmpdir)
+        return None
+
+    # Apply tagging post-process.
+    cover_path = track_tmpdir / "cover.jpg"
+    parts = [p for p in track_tmpdir.iterdir() if p.is_file() and p.stat().st_size > 0]
+    audio = next((p for p in parts if p.suffix.lower() in tagger.SUPPORTED_SUFFIXES), None)
+    if audio is None:
+        cleanup_dir(track_tmpdir)
+        return None
+
+    post = _make_postprocess(meta, cover_path)
+    if post is not None:
+        try:
+            await post(parts)
+        except Exception:  # noqa: BLE001
+            log.info("spotify zip tagging failed for %s", track_ref.id, exc_info=True)
+
+    # Rename to a clean track-numbered filename.
+    artists = meta.artist_line() or candidate.uploader or "unknown"
+    title = meta.title or candidate.title or "unknown"
+    new_name = f"{index:02d} - {sanitize_filename(artists)} - {sanitize_filename(title)}.mp3"
+    final = tmpdir / new_name
+    try:
+        audio.replace(final)
+    except OSError:
+        final = audio
+    cleanup_dir(track_tmpdir)
+    return final
+
+
+async def _download_collection_zip(message: Message, bot: Bot, state: _CollectionState, lang: str) -> None:
+    """Download every track of a Spotify collection into one ZIP archive."""
+    srv = get_services()
+    user_id = state.user_id
+    refs = state.refs
+    tmpdir = state.tmpdir
+
+    if not await srv.ratelimiter.start_job(user_id):
+        await links.edit_message(message=message, body=text(lang, "active_job"))
+        return
+
+    await srv.queue.enter()
+    try:
+        ok = 0
+        fail = 0
+        for index, track_ref in enumerate(refs, start=1):
+            await links.edit_message(
+                message=message,
+                body=text(lang, "spotify_zip_building", ok=ok, total=len(refs)),
+            )
+            try:
+                path = await _download_one_track(srv, track_ref, tmpdir, lang, index)
+            except Exception:  # noqa: BLE001
+                log.info("spotify zip track %s failed", track_ref.id, exc_info=True)
+                path = None
+            if path is not None:
+                ok += 1
+            else:
+                fail += 1
+
+        if ok == 0:
+            await links.edit_message(
+                message=message,
+                body=text(lang, "spotify_zip_failed"),
+            )
+            cleanup_dir(tmpdir)
+            _collection_state.pop(user_id, None)
+            return
+
+        zip_path = tmpdir / _zip_name(state.meta, state.ref)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+            for p in sorted(tmpdir.iterdir()):
+                if p.is_file() and p.suffix.lower() in tagger.SUPPORTED_SUFFIXES:
+                    zf.write(p, arcname=p.name)
+
+        total_size = zip_path.stat().st_size
+        size_mb = total_size / (1024 * 1024)
+
+        await links.edit_message(
+            message=message,
+            body=text(
+                lang,
+                "spotify_zip_done",
+                title=sanitize_filename(state.meta.name if state.meta else None) or state.ref.id,
+                count=ok,
+                size_mb=round(size_mb, 1),
+            ),
         )
-        outcome = await links.download_flow(bot, flow, "audio_mp3", user.id)
-        if outcome == "ok":
-            ok += 1
-        else:
-            fail += 1
-            cleanup_dir(tmpdir)
 
-    await message.answer(text(lang, "spotify_collection_done", ok=ok, fail=fail))
+        chat_id = message.chat.id if message else user_id
+        caption_name = state.meta.name if state.meta else state.ref.id
+        await bot.send_document(chat_id, FSInputFile(zip_path), caption=f"{caption_name}.zip")
+        await srv.db.record_download(
+            user_id,
+            url_hash(state.ref.canonical),
+            "spotify",
+            "spotify_zip",
+            "ok",
+            None,
+            total_size,
+            None,
+        )
+        cleanup_dir(tmpdir)
+        _collection_state.pop(user_id, None)
+    finally:
+        await srv.queue.leave()
+        await srv.ratelimiter.finish_job(user_id)
+
+
+async def _download_collection_individual(message: Message, bot: Bot, state: _CollectionState, lang: str) -> None:
+    """Download every track of a Spotify collection individually."""
+    srv = get_services()
+    user_id = state.user_id
+    refs = state.refs
+
+    if not await srv.ratelimiter.start_job(user_id):
+        await links.edit_message(message=message, body=text(lang, "active_job"))
+        return
+
+    await srv.queue.enter()
+    try:
+        ok = 0
+        fail = 0
+        for track_ref in refs:
+            meta = await _fetch_meta(track_ref)
+            if meta is None or not meta.is_usable():
+                fail += 1
+                continue
+            track_tmpdir = links.make_tmpdir(user_id)
+            result = await _match(meta, track_tmpdir)
+            candidate = result.candidate
+            if candidate is None:
+                fail += 1
+                cleanup_dir(track_tmpdir)
+                continue
+
+            cover_path = track_tmpdir / "cover.jpg"
+            flow = links.PendingFlow(
+                url=candidate.url,
+                url_site=candidate.source,
+                info={
+                    "id": track_ref.id,
+                    "title": meta.title or candidate.title,
+                    "uploader": meta.artist_line() or candidate.uploader,
+                    "duration": meta.duration_s or candidate.duration or 0.0,
+                },
+                tmpdir=track_tmpdir,
+                title=meta.title or candidate.title,
+                duration=float(meta.duration_s or candidate.duration or 0.0),
+                uploader=meta.artist_line() or candidate.uploader,
+                prefix="dl",
+                playlist_items=None,
+                lang=lang,
+                status_message=message,
+                cache_key=url_hash(f"spotify:{track_ref.id}"),
+                audio_meta=_audio_meta(meta, cover_path),
+                postprocess=_make_postprocess(meta, cover_path),
+            )
+            outcome = await links.download_flow(bot, flow, "audio_mp3", user_id)
+            if outcome == "ok":
+                ok += 1
+            else:
+                fail += 1
+                cleanup_dir(track_tmpdir)
+
+        await message.answer(text(lang, "spotify_collection_done", ok=ok, fail=fail))
+        cleanup_dir(state.tmpdir)
+        _collection_state.pop(user_id, None)
+    finally:
+        await srv.queue.leave()
+        await srv.ratelimiter.finish_job(user_id)
