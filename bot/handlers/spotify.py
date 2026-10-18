@@ -1073,7 +1073,12 @@ async def _download_one_track(
 
 
 async def _download_collection_zip(message: Message, bot: Bot, state: _CollectionState, lang: str) -> None:
-    """Download every selected track of a Spotify collection into one ZIP archive."""
+    """Download every selected track of a Spotify collection into one ZIP archive.
+
+    Tracks are downloaded concurrently (max 3 at a time) to speed up large
+    collections. ZIP downloads bypass the per-user active-job limit but still
+    respect the global queue so the server isn't overwhelmed.
+    """
     srv = get_services()
     user_id = state.user_id
     refs = state.refs
@@ -1089,49 +1094,65 @@ async def _download_collection_zip(message: Message, bot: Bot, state: _Collectio
         _collection_state.pop(user_id, None)
         return
 
-    if not await srv.ratelimiter.start_job(user_id):
-        await links.edit_message(message=message, body=text(lang, "active_job"))
-        return
-
     await srv.queue.enter()
     try:
+        semaphore = asyncio.Semaphore(3)
         ok = 0
         fail = 0
         total = len(selected)
+        counter_lock = asyncio.Lock()
 
-        for pos, index in enumerate(selected, start=1):
-            # Honour cancellation.
+        async def download_one(track_ref: urls.SpotifyRef, index: int) -> None:
+            nonlocal ok, fail
+            # Honour pause before starting; cancelled downloads bail out.
+            await state.zip_pause_event.wait()
+            if state.zip_cancelled:
+                return
+            async with semaphore:
+                # Re-check cancel after acquiring the semaphore slot.
+                if state.zip_cancelled:
+                    return
+                try:
+                    path = await _download_one_track(srv, track_ref, tmpdir, lang, index)
+                except Exception:  # noqa: BLE001
+                    log.info("spotify zip track %s failed", track_ref.id, exc_info=True)
+                    path = None
+            async with counter_lock:
+                if path is not None:
+                    ok += 1
+                else:
+                    fail += 1
+
+        # Process in batches of up to 3 concurrent downloads.
+        for batch_start in range(0, len(selected), 3):
             if state.zip_cancelled:
                 break
-
-            # Honour pause: wait until resumed or cancelled.
             await state.zip_pause_event.wait()
             if state.zip_cancelled:
                 break
 
-            track_ref = refs[index]
+            batch = selected[batch_start:batch_start + 3]
+            await asyncio.gather(
+                *(download_one(refs[idx], idx) for idx in batch)
+            )
+
+            # Refresh progress after each batch (avoids flooding Telegram).
+            async with counter_lock:
+                current_ok = ok
+                current_total = total
+
             await links.edit_message(
                 message=message,
                 body=text(
                     lang,
                     "spotify_zip_building",
-                    ok=ok,
-                    total=total,
+                    ok=current_ok,
+                    total=current_total,
                 ),
                 reply_markup=_zip_control_keyboard(
                     lang, paused=not state.zip_pause_event.is_set(), kind=state.ref.kind, id_=state.ref.id
                 ),
             )
-
-            try:
-                path = await _download_one_track(srv, track_ref, tmpdir, lang, pos)
-            except Exception:  # noqa: BLE001
-                log.info("spotify zip track %s failed", track_ref.id, exc_info=True)
-                path = None
-            if path is not None:
-                ok += 1
-            else:
-                fail += 1
 
         if state.zip_cancelled:
             await links.edit_message(
@@ -1188,4 +1209,3 @@ async def _download_collection_zip(message: Message, bot: Bot, state: _Collectio
         _collection_state.pop(user_id, None)
     finally:
         await srv.queue.leave()
-        await srv.ratelimiter.finish_job(user_id)
