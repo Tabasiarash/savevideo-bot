@@ -20,6 +20,7 @@ matched track is then downloaded and sent in turn.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -61,13 +62,22 @@ _AUDIO_SUFFIXES = tagger.SUPPORTED_SUFFIXES
 # Callback data for the "try another match" button.
 _REMATCH_PREFIX = "sp:rematch"
 
-# Callback data for Spotify collection delivery choice.
-_ZIP_PREFIX = "sp:zip"
-_INDIVIDUAL_PREFIX = "sp:ind"
+# Callback data for Spotify collection track selection.
+_SEL_PREFIX = "sp:sel"          # sp:sel:<kind>:<id>:<page>:<index>
+_PAGE_PREFIX = "sp:pg"          # sp:pg:<kind>:<id>:<page>
+
+# Callback data for creating a ZIP from selected tracks.
+_ZIP_PREFIX = "sp:zip"          # sp:zip:<kind>:<id>
+
+# Callback data for ZIP download pause/resume/cancel.
+_ZIP_CTRL_PREFIX = "sp:zipc"    # sp:zipc:<pause|resume|cancel>:<kind>:<id>
 
 # How many candidates a single card may cycle through before the "try another
 # match" button is dropped, so a request cannot hammer the sources forever.
 MAX_REMATCH_CANDIDATES = 3
+
+# Tracks shown per selection page.
+_TRACKS_PER_PAGE = 8
 
 
 @dataclass
@@ -89,7 +99,7 @@ class _MatchState:
 
 @dataclass
 class _CollectionState:
-    """Context for a Spotify collection awaiting ZIP/individual delivery choice."""
+    """Context for a Spotify collection awaiting track selection and ZIP build."""
 
     user_id: int
     ref: urls.SpotifyRef
@@ -99,6 +109,13 @@ class _CollectionState:
     lang: str
     status_message: Message
     created_at: float = field(default_factory=time.time)
+    # Indices (into refs) the user has selected for the ZIP.
+    selected: set[int] = field(default_factory=set)
+    # Current selection page (0-based).
+    page: int = 0
+    # ZIP download control flags.
+    zip_cancelled: bool = False
+    zip_pause_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     def is_expired(self) -> bool:
         return (time.time() - self.created_at) > links.PENDING_TTL_S
@@ -670,28 +687,8 @@ async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status:
         await links.edit_message(message=status, body=text(lang, "spotify_no_metadata"))
         return
 
-    title = collection.name or ref.id
-    artist = collection.artist_or_owner or "?"
-    count = len(refs)
-
-    # Store the refs on the pending flow so the callback can retrieve them.
     tmpdir = links.make_tmpdir(user.id)
-    flow = links.PendingFlow(
-        url=ref.canonical,
-        url_site="spotify",
-        info={"collection_refs": [r.id for r in refs]},
-        tmpdir=tmpdir,
-        title=title,
-        duration=0.0,
-        uploader=artist,
-        prefix="dl",
-        playlist_items=None,
-        lang=lang,
-        status_message=status,
-        cache_key=url_hash(f"spotify:collection:{ref.kind}:{ref.id}"),
-    )
-    links.remember_flow(user.id, flow)
-    _collection_state[user.id] = _CollectionState(
+    state = _CollectionState(
         user_id=user.id,
         ref=ref,
         meta=collection,
@@ -700,37 +697,158 @@ async def _handle_collection(message: Message, bot: Bot, ref, lang: str, status:
         lang=lang,
         status_message=status,
     )
+    _collection_state[user.id] = state
+
+    await _render_selection_page(state)
+
+
+def _selection_keyboard(state: _CollectionState) -> InlineKeyboardMarkup:
+    """Build the track-selection inline keyboard for the current page."""
+    lang = state.lang
+    refs = state.refs
+    page = state.page
+    selected = state.selected
+    total = len(refs)
+
+    start = page * _TRACKS_PER_PAGE
+    end = min(start + _TRACKS_PER_PAGE, total)
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx in range(start, end):
+        ref = refs[idx]
+        label = ref.id[:40]  # fallback if meta not yet fetched
+        # Try to get a nicer title from collection meta? We only have refs here.
+        is_sel = idx in selected
+        mark = "✅" if is_sel else "⬜"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} {label}",
+                    callback_data=f"{_SEL_PREFIX}:{state.ref.kind}:{state.ref.id}:{page}:{idx}",
+                )
+            ]
+        )
+
+    # Navigation row.
+    nav: list[list[InlineKeyboardButton]] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text=text(lang, "button_spotify_page_prev"),
+                callback_data=f"{_PAGE_PREFIX}:{state.ref.kind}:{state.ref.id}:{page - 1}",
+            )
+        )
+    if end < total:
+        nav.append(
+            InlineKeyboardButton(
+                text=text(lang, "button_spotify_page_next"),
+                callback_data=f"{_PAGE_PREFIX}:{state.ref.kind}:{state.ref.id}:{page + 1}",
+            )
+        )
+    if nav:
+        rows.append(nav)
+
+    selected_count = len(selected)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=text(lang, "button_spotify_create_zip", count=selected_count),
+                callback_data=f"{_ZIP_PREFIX}:{state.ref.kind}:{state.ref.id}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_selection_page(state: _CollectionState) -> None:
+    """Render (or re-render) the track-selection page."""
+    lang = state.lang
+    refs = state.refs
+    page = state.page
+    total = len(refs)
+    pages = max(1, (total + _TRACKS_PER_PAGE - 1) // _TRACKS_PER_PAGE)
+    selected_count = len(state.selected)
+
+    title = state.meta.name if state.meta else state.ref.id
+    artist = state.meta.artist_or_owner if state.meta else "?"
 
     body = text(
         lang,
-        "spotify_collection_pick",
+        "spotify_select_tracks",
         title=title,
         artist=artist,
-        count=count,
+        selected=selected_count,
+        total=total,
+        page=page + 1,
+        pages=pages,
     )
+    kb = _selection_keyboard(state)
+    await links.edit_message(message=state.status_message, body=body, reply_markup=kb)
 
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=text(lang, "button_spotify_zip"),
-                    callback_data=f"{_ZIP_PREFIX}:{ref.kind}:{ref.id}",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=text(lang, "button_spotify_individual"),
-                    callback_data=f"{_INDIVIDUAL_PREFIX}:{ref.kind}:{ref.id}",
-                ),
-            ],
-        ]
-    )
-    await links.edit_message(message=status, body=body, reply_markup=kb)
+
+@router.callback_query(F.data.startswith(_SEL_PREFIX))
+async def _on_track_select(callback: CallbackQuery, bot: Bot) -> None:
+    """Toggle selection of a single track on the current page."""
+    await callback.answer()
+    parts = callback.data.split(":")
+    if len(parts) < 6:
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        return
+    kind = parts[2]
+    cid = parts[3]
+    page = int(parts[4])
+    index = int(parts[5])
+    user = callback.from_user
+    assert user is not None
+
+    srv = get_services()
+    lang = await srv.db.get_language(user.id) or settings.default_language
+
+    state = _collection_state.get(user.id)
+    if state is None or state.ref.id != cid or state.ref.kind != kind or state.page != page:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+
+    if index in state.selected:
+        state.selected.discard(index)
+    else:
+        state.selected.add(index)
+
+    await _render_selection_page(state)
+
+
+@router.callback_query(F.data.startswith(_PAGE_PREFIX))
+async def _on_selection_page(callback: CallbackQuery, bot: Bot) -> None:
+    """Change the track-selection page."""
+    await callback.answer()
+    parts = callback.data.split(":")
+    if len(parts) < 5:
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        return
+    kind = parts[2]
+    cid = parts[3]
+    page = int(parts[4])
+    user = callback.from_user
+    assert user is not None
+
+    srv = get_services()
+    lang = await srv.db.get_language(user.id) or settings.default_language
+
+    state = _collection_state.get(user.id)
+    if state is None or state.ref.id != cid or state.ref.kind != kind:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+
+    total = len(state.refs)
+    max_page = max(0, (total + _TRACKS_PER_PAGE - 1) // _TRACKS_PER_PAGE - 1)
+    page = max(0, min(page, max_page))
+    state.page = page
+    await _render_selection_page(state)
 
 
 @router.callback_query(F.data.startswith(_ZIP_PREFIX))
 async def _on_collection_zip(callback: CallbackQuery, bot: Bot) -> None:
-    """Download a Spotify collection as a single ZIP archive."""
+    """Start downloading the selected tracks into a single ZIP archive."""
     await callback.answer()
     parts = callback.data.split(":")
     if len(parts) < 4:
@@ -749,19 +867,26 @@ async def _on_collection_zip(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer(text(lang, "expired_selection"), show_alert=True)
         return
 
+    if not state.selected:
+        await callback.answer(text(lang, "spotify_select_tracks", title="", artist="", selected=0, total=0, page=1, pages=1), show_alert=True)
+        return
+
+    state.zip_cancelled = False
+    state.zip_pause_event.set()
     await _download_collection_zip(callback.message, bot, state, lang)
 
 
-@router.callback_query(F.data.startswith(_INDIVIDUAL_PREFIX))
-async def _on_collection_individual(callback: CallbackQuery, bot: Bot) -> None:
-    """Download each track of a Spotify collection individually."""
+@router.callback_query(F.data.startswith(_ZIP_CTRL_PREFIX))
+async def _on_zip_control(callback: CallbackQuery, bot: Bot) -> None:
+    """Pause / resume / cancel an in-progress ZIP download."""
     await callback.answer()
     parts = callback.data.split(":")
-    if len(parts) < 4:
+    if len(parts) < 5:
         await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
         return
-    kind = parts[2]
-    cid = parts[3]
+    action = parts[2]
+    kind = parts[3]
+    cid = parts[4]
     user = callback.from_user
     assert user is not None
 
@@ -773,7 +898,68 @@ async def _on_collection_individual(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer(text(lang, "expired_selection"), show_alert=True)
         return
 
-    await _download_collection_individual(callback.message, bot, state, lang)
+    if action == "pause":
+        state.zip_pause_event.clear()
+        await links.edit_message(
+            message=callback.message,
+            body=text(lang, "spotify_zip_paused"),
+            reply_markup=_zip_control_keyboard(lang, paused=True, kind=kind, id_=cid),
+        )
+    elif action == "resume":
+        state.zip_pause_event.set()
+        await links.edit_message(
+            message=callback.message,
+            body=text(lang, "spotify_zip_resumed"),
+            reply_markup=_zip_control_keyboard(lang, paused=False, kind=kind, id_=cid),
+        )
+    elif action == "cancel":
+        state.zip_cancelled = True
+        state.zip_pause_event.set()
+        await links.edit_message(
+            message=callback.message,
+            body=text(lang, "spotify_zip_cancelled"),
+        )
+        cleanup_dir(state.tmpdir)
+        _collection_state.pop(user.id, None)
+
+
+def _zip_control_keyboard(lang: str, paused: bool, kind: str, id_: str) -> InlineKeyboardMarkup:
+    """Inline keyboard shown while a ZIP download is in progress."""
+    if paused:
+        middle = InlineKeyboardButton(
+            text=text(lang, "button_spotify_zip_resume"),
+            callback_data=f"{_ZIP_CTRL_PREFIX}:resume:{kind}:{id_}",
+        )
+    else:
+        middle = InlineKeyboardButton(
+            text=text(lang, "button_spotify_zip_pause"),
+            callback_data=f"{_ZIP_CTRL_PREFIX}:pause:{kind}:{id_}",
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [middle],
+            [
+                InlineKeyboardButton(
+                    text=text(lang, "button_spotify_zip_cancel"),
+                    callback_data=f"{_ZIP_CTRL_PREFIX}:cancel:{kind}:{id_}",
+                )
+            ],
+        ]
+    )
+
+
+def _zip_name(collection: metadata.CollectionMeta | None, ref: urls.SpotifyRef) -> str:
+    """Build a safe ZIP filename from collection metadata."""
+    parts = []
+    if collection and collection.name:
+        parts.append(collection.name)
+    if collection and collection.artist_or_owner:
+        parts.append(collection.artist_or_owner)
+    if not parts:
+        parts.append(ref.id)
+    base = " - ".join(parts)
+    safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", base).strip()[:120] or ref.id
+    return f"{safe}.zip"
 
 
 def _zip_name(collection: metadata.CollectionMeta | None, ref: urls.SpotifyRef) -> str:
@@ -852,11 +1038,21 @@ async def _download_one_track(
 
 
 async def _download_collection_zip(message: Message, bot: Bot, state: _CollectionState, lang: str) -> None:
-    """Download every track of a Spotify collection into one ZIP archive."""
+    """Download every selected track of a Spotify collection into one ZIP archive."""
     srv = get_services()
     user_id = state.user_id
     refs = state.refs
+    selected = sorted(state.selected)
     tmpdir = state.tmpdir
+
+    if not selected:
+        await links.edit_message(
+            message=message,
+            body=text(lang, "spotify_zip_failed"),
+        )
+        cleanup_dir(tmpdir)
+        _collection_state.pop(user_id, None)
+        return
 
     if not await srv.ratelimiter.start_job(user_id):
         await links.edit_message(message=message, body=text(lang, "active_job"))
@@ -866,13 +1062,34 @@ async def _download_collection_zip(message: Message, bot: Bot, state: _Collectio
     try:
         ok = 0
         fail = 0
-        for index, track_ref in enumerate(refs, start=1):
+        total = len(selected)
+
+        for pos, index in enumerate(selected, start=1):
+            # Honour cancellation.
+            if state.zip_cancelled:
+                break
+
+            # Honour pause: wait until resumed or cancelled.
+            await state.zip_pause_event.wait()
+            if state.zip_cancelled:
+                break
+
+            track_ref = refs[index]
             await links.edit_message(
                 message=message,
-                body=text(lang, "spotify_zip_building", ok=ok, total=len(refs)),
+                body=text(
+                    lang,
+                    "spotify_zip_building",
+                    ok=ok,
+                    total=total,
+                ),
+                reply_markup=_zip_control_keyboard(
+                    lang, paused=not state.zip_pause_event.is_set(), kind=state.ref.kind, id_=state.ref.id
+                ),
             )
+
             try:
-                path = await _download_one_track(srv, track_ref, tmpdir, lang, index)
+                path = await _download_one_track(srv, track_ref, tmpdir, lang, pos)
             except Exception:  # noqa: BLE001
                 log.info("spotify zip track %s failed", track_ref.id, exc_info=True)
                 path = None
@@ -880,6 +1097,15 @@ async def _download_collection_zip(message: Message, bot: Bot, state: _Collectio
                 ok += 1
             else:
                 fail += 1
+
+        if state.zip_cancelled:
+            await links.edit_message(
+                message=message,
+                body=text(lang, "spotify_zip_cancelled"),
+            )
+            cleanup_dir(tmpdir)
+            _collection_state.pop(user_id, None)
+            return
 
         if ok == 0:
             await links.edit_message(
@@ -924,70 +1150,6 @@ async def _download_collection_zip(message: Message, bot: Bot, state: _Collectio
             None,
         )
         cleanup_dir(tmpdir)
-        _collection_state.pop(user_id, None)
-    finally:
-        await srv.queue.leave()
-        await srv.ratelimiter.finish_job(user_id)
-
-
-async def _download_collection_individual(message: Message, bot: Bot, state: _CollectionState, lang: str) -> None:
-    """Download every track of a Spotify collection individually."""
-    srv = get_services()
-    user_id = state.user_id
-    refs = state.refs
-
-    if not await srv.ratelimiter.start_job(user_id):
-        await links.edit_message(message=message, body=text(lang, "active_job"))
-        return
-
-    await srv.queue.enter()
-    try:
-        ok = 0
-        fail = 0
-        for track_ref in refs:
-            meta = await _fetch_meta(track_ref)
-            if meta is None or not meta.is_usable():
-                fail += 1
-                continue
-            track_tmpdir = links.make_tmpdir(user_id)
-            result = await _match(meta, track_tmpdir)
-            candidate = result.candidate
-            if candidate is None:
-                fail += 1
-                cleanup_dir(track_tmpdir)
-                continue
-
-            cover_path = track_tmpdir / "cover.jpg"
-            flow = links.PendingFlow(
-                url=candidate.url,
-                url_site=candidate.source,
-                info={
-                    "id": track_ref.id,
-                    "title": meta.title or candidate.title,
-                    "uploader": meta.artist_line() or candidate.uploader,
-                    "duration": meta.duration_s or candidate.duration or 0.0,
-                },
-                tmpdir=track_tmpdir,
-                title=meta.title or candidate.title,
-                duration=float(meta.duration_s or candidate.duration or 0.0),
-                uploader=meta.artist_line() or candidate.uploader,
-                prefix="dl",
-                playlist_items=None,
-                lang=lang,
-                status_message=message,
-                cache_key=url_hash(f"spotify:{track_ref.id}"),
-                audio_meta=_audio_meta(meta, cover_path),
-                postprocess=_make_postprocess(meta, cover_path),
-            )
-            outcome = await links.download_flow(bot, flow, "audio_mp3", user_id)
-            if outcome == "ok":
-                ok += 1
-            else:
-                fail += 1
-                cleanup_dir(track_tmpdir)
-
-        await message.answer(text(lang, "spotify_collection_done", ok=ok, fail=fail))
-        cleanup_dir(state.tmpdir)
         _collection_state.pop(user_id, None)
     finally:
         await srv.queue.leave()

@@ -215,15 +215,25 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
         ),
         "spotify_collection_found": "🎵 This collection has {count} items; processing up to {max}.",
-        "spotify_collection_pick": (
+        "spotify_select_tracks": (
             "🎵 <b>{title}</b>\n👤 {artist}\n\n"
-            "This collection contains {count} tracks. Choose how to download:"
+            "Select the tracks you want (tap to toggle), then press <b>Create ZIP</b>:\n"
+            "Selected: {selected}/{total}  ·  Page {page}/{pages}"
         ),
-        "button_spotify_zip": "📦 Download as ZIP",
-        "button_spotify_individual": "🎵 Send individually",
-        "spotify_zip_building": "📦 Building ZIP: downloaded {ok}/{total} tracks...",
+        "button_spotify_select": "⬜ {title}",
+        "button_spotify_deselect": "✅ {title}",
+        "button_spotify_create_zip": "📦 Create ZIP ({count})",
+        "button_spotify_page_next": "Next ▶️",
+        "button_spotify_page_prev": "◀️ Prev",
+        "spotify_zip_building": "📦 Building ZIP: {ok}/{total} tracks...",
         "spotify_zip_done": "✅ ZIP created: {title}.zip ({count} tracks, {size_mb} MB). Sending...",
         "spotify_zip_failed": "❌ Could not create ZIP file (all downloads failed).",
+        "spotify_zip_paused": "⏸️ ZIP download paused. Tap Resume to continue.",
+        "spotify_zip_resumed": "▶️ ZIP download resumed.",
+        "spotify_zip_cancelled": "⏹️ ZIP download cancelled.",
+        "button_spotify_zip_pause": "⏸️ Pause",
+        "button_spotify_zip_resume": "▶️ Resume",
+        "button_spotify_zip_cancel": "⏹️ Cancel",
         "spotify_collection_done": "✅ Done: {ok} track(s) sent, {fail} failed.",
         "spotify_match_source": "🔗 Matched on {source}.",
         "podcast_disabled": (
@@ -482,15 +492,25 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
         ),
         "spotify_collection_found": "🎵 Diese Sammlung hat {count} Elemente; es werden bis zu {max} verarbeitet.",
-        "spotify_collection_pick": (
+        "spotify_select_tracks": (
             "🎵 <b>{title}</b>\n👤 {artist}\n\n"
-            "Diese Sammlung enthält {count} Titel. Wähle eine Download-Methode:"
+            "Wähle die Titel aus, die du herunterladen möchtest (tippen zum Umschalten), dann drücke <b>ZIP erstellen</b>:\n"
+            "Ausgewählt: {selected}/{total}  ·  Seite {page}/{pages}"
         ),
-        "button_spotify_zip": "📦 Als ZIP herunterladen",
-        "button_spotify_individual": "🎵 Einzeln senden",
-        "spotify_zip_building": "📦 ZIP wird erstellt: {ok}/{total} Titel heruntergeladen...",
+        "button_spotify_select": "⬜ {title}",
+        "button_spotify_deselect": "✅ {title}",
+        "button_spotify_create_zip": "📦 ZIP erstellen ({count})",
+        "button_spotify_page_next": "Nächste ▶️",
+        "button_spotify_page_prev": "◀️ Vorherige",
+        "spotify_zip_building": "📦 ZIP wird erstellt: {ok}/{total} Titel...",
         "spotify_zip_done": "✅ ZIP erstellt: {title}.zip ({count} Titel, {size_mb} MB). Wird gesendet...",
         "spotify_zip_failed": "❌ ZIP konnte nicht erstellt werden (alle Downloads fehlgeschlagen).",
+        "spotify_zip_paused": "⏸️ ZIP-Download pausiert. Tippe auf Fortsetzen, um fortzufahren.",
+        "spotify_zip_resumed": "▶️ ZIP-Download fortgesetzt.",
+        "spotify_zip_cancelled": "⏹️ ZIP-Download abgebrochen.",
+        "button_spotify_zip_pause": "⏸️ Pause",
+        "button_spotify_zip_resume": "▶️ Fortsetzen",
+        "button_spotify_zip_cancel": "⏹️ Abbrechen",
         "spotify_collection_done": "✅ Fertig: {ok} Titel gesendet, {fail} fehlgeschlagen.",
         "spotify_match_source": "🔗 Zugeordnet auf {source}.",
         "podcast_disabled": (
@@ -745,15 +765,25 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET)."
         ),
         "spotify_collection_found": "🎵 این مجموعه {count} مورد دارد؛ تا {max} مورد پردازش می‌شود.",
-        "spotify_collection_pick": (
+        "spotify_select_tracks": (
             "🎵 <b>{title}</b>\n👤 {artist}\n\n"
-            "این مجموعه شامل {count} آهنگ است. روش دانلود را انتخاب کنید:"
+            "آهنگهایی که می‌خواهید را انتخاب کنید (برای انتخاب/لغو انتخاب بزنید)، سپس روی «ساخت ZIP» بزنید:\n"
+            "انتخاب شده: {selected}/{total}  ·  صفحه {page}/{pages}"
         ),
-        "button_spotify_zip": "📦 دانلود به صورت ZIP",
-        "button_spotify_individual": "🎵 ارسال تکی آهنگ‌ها",
-        "spotify_zip_building": "📦 در حال ساخت فایل ZIP: {ok} از {total} آهنگ دانلود شد...",
+        "button_spotify_select": "⬜ {title}",
+        "button_spotify_deselect": "✅ {title}",
+        "button_spotify_create_zip": "📦 ساخت ZIP ({count})",
+        "button_spotify_page_next": "صفحه بعد ▶️",
+        "button_spotify_page_prev": "◀️ صفحه قبل",
+        "spotify_zip_building": "📦 در حال ساخت ZIP: {ok} از {total} آهنگ...",
         "spotify_zip_done": "✅ فایل ZIP ساخته شد: {title}.zip ({count} آهنگ، {size_mb} مگابایت). در حال ارسال...",
         "spotify_zip_failed": "❌ ساخت فایل ZIP ممکن نشد (تمام دانلودها ناموفق بود).",
+        "spotify_zip_paused": "⏸️ دانلود ZIP متوقف شد. برای ادامه روی ادامه بزنید.",
+        "spotify_zip_resumed": "▶️ دانلود ZIP دوباره شروع شد.",
+        "spotify_zip_cancelled": "⏹️ دانلود ZIP لغو شد.",
+        "button_spotify_zip_pause": "⏸️ متوقف",
+        "button_spotify_zip_resume": "▶️ ادامه",
+        "button_spotify_zip_cancel": "⏹️ لغو",
         "spotify_collection_done": "✅ انجام شد: {ok} آهنگ ارسال شد، {fail} ناموفق.",
         "spotify_match_source": "🔗 در {source} تطبیق داده شد.",
         "podcast_disabled": (
