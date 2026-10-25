@@ -15,7 +15,7 @@ from aiogram.enums import ParseMode
 
 from bot.config import settings
 from bot.deps import init_services
-from bot.handlers import admin, inline, links, spotify, start
+from bot.handlers import admin, convert, inline, links, spotify, start
 from bot.handlers.common import active_temp_dirs
 from bot.services.downloader import sweep_temp_dir
 from bot.services.podcast.meta import META_TTL_S as PODCAST_META_TTL_S
@@ -81,6 +81,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(admin.router)
     dp.include_router(spotify.router)
     dp.include_router(links.router)
+    dp.include_router(convert.router)
     dp.include_router(inline.router)
     return dp
 
@@ -89,6 +90,7 @@ PUBLIC_COMMANDS = [
     types.BotCommand(command="start", description="Start / welcome"),
     types.BotCommand(command="help", description="Quick help overview"),
     types.BotCommand(command="tutorial", description="Guide: abilities & limits"),
+    types.BotCommand(command="convert", description="Convert media files"),
     types.BotCommand(command="playlist", description="Download a playlist"),
     types.BotCommand(command="language", description="Change language"),
 ]

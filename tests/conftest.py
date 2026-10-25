@@ -194,6 +194,16 @@ class FakeBot:
             raise RuntimeError("Forbidden: bot was blocked by the user")
         return SimpleNamespace(message_id=1)
 
+    async def download(self, file, destination=None, *, timeout=None):
+        """Fake download: create an empty file at ``destination`` so handlers can
+        proceed as if a user-uploaded file was received."""
+        if destination is None:
+            destination = f"file_{getattr(file, 'file_id', file)}"
+        dest = Path(destination)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"fake-media-content")
+        return dest
+
 
 class FakeUpdaterWithRetry(FakeUpdater):
     def __init__(self, retry: bool) -> None:

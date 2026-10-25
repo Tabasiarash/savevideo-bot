@@ -236,6 +236,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_spotify_zip_cancel": "⏹️ Cancel",
         "spotify_collection_done": "✅ Done: {ok} track(s) sent, {fail} failed.",
         "spotify_match_source": "🔗 Matched on {source}.",
+        "convert_prompt": (
+            "🎬 <b>Media converter</b>\n\n"
+            "Send me a video, audio, or image file and I'll convert it to another "
+            "format or quality. I support MP4/MP3/M4A/JPEG/PNG with several quality "
+            "presets, so you can shrink large files before sending them.\n\n"
+            "Just send me a media file to begin."
+        ),
+        "convert_fetching": "⬇️ Fetching your file…",
+        "convert_fetch_failed": "❌ Could not download your file. Please try again.",
+        "convert_unsupported": "❌ That file type isn't supported for conversion.",
+        "convert_file_too_large": "❌ File is larger than the {limit} MB conversion limit.",
+        "convert_choose_format": "🎯 <b>Choose a target format:</b>",
+        "convert_choose_quality": "📐 <b>Choose a quality preset:</b>",
+        "convert_ready": "📦 Convert to <b>{format}</b> at <b>{quality}</b>. Tap <b>Convert</b> to start.",
+        "convert_converting": "🔄 Converting… {pct}% complete",
+        "convert_done": "✅ Conversion complete. Sending…",
+        "convert_failed": "❌ Conversion failed. Please try another preset.",
+        "convert_cancelled": "⏹️ Conversion cancelled.",
+        "convert_cancelling": "⏹️ Cancelling…",
+        "button_convert_cancel": "❌ Cancel",
         "podcast_disabled": (
             "🎙️ Podcast episodes can be fetched from the publisher's own feed, but this "
             "feature is currently disabled. Spotify audio itself is DRM-protected and never downloaded."
@@ -513,6 +533,27 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_spotify_zip_cancel": "⏹️ Abbrechen",
         "spotify_collection_done": "✅ Fertig: {ok} Titel gesendet, {fail} fehlgeschlagen.",
         "spotify_match_source": "🔗 Zugeordnet auf {source}.",
+        "convert_prompt": (
+            "🎬 <b>Medienkonverter</b>\n\n"
+            "Senden Sie mir ein Video, eine Audiodatei oder ein Bild, und ich konvertiere es "
+            "in ein anderes Format oder eine andere Qualität. Ich unterstütze MP4/MP3/M4A/"
+            "JPEG/PNG mit mehreren Qualitätsvoreinstellungen, sodass Sie große Dateien vor "
+            "dem Senden verkleinern können.\n\n"
+            "Senden Sie einfach eine Mediendatei, um zu beginnen."
+        ),
+        "convert_fetching": "⬇️ Datei wird geladen…",
+        "convert_fetch_failed": "❌ Die Datei konnte nicht geladen werden. Bitte versuchen Sie es erneut.",
+        "convert_unsupported": "❌ Dieser Dateityp wird für die Konvertierung nicht unterstützt.",
+        "convert_file_too_large": "❌ Die Datei ist größer als das {limit} MB-Konvertierungslimit.",
+        "convert_choose_format": "🎯 <b>Zielformat wählen:</b>",
+        "convert_choose_quality": "📐 <b>Qualitätsvoreinstellung wählen:</b>",
+        "convert_ready": "📦 In <b>{format}</b> mit <b>{quality}</b> konvertieren. Tippen Sie auf <b>Konvertieren</b>, um zu starten.",
+        "convert_converting": "🔄 Wird konvertiert… {pct}% fertig",
+        "convert_done": "✅ Konvertierung abgeschlossen. Wird gesendet…",
+        "convert_failed": "❌ Konvertierung fehlgeschlagen. Bitte versuchen Sie eine andere Voreinstellung.",
+        "convert_cancelled": "⏹️ Konvertierung abgebrochen.",
+        "convert_cancelling": "⏹️ Wird abgebrochen…",
+        "button_convert_cancel": "❌ Abbrechen",
         "podcast_disabled": (
             "🎙️ Podcast-Folgen können aus dem Feed des Herausgebers geladen werden, aber "
             "diese Funktion ist derzeit deaktiviert. Spotify-Audio selbst ist DRM-geschützt "
@@ -786,6 +827,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "button_spotify_zip_cancel": "⏹️ لغو",
         "spotify_collection_done": "✅ انجام شد: {ok} آهنگ ارسال شد، {fail} ناموفق.",
         "spotify_match_source": "🔗 در {source} تطبیق داده شد.",
+        "convert_prompt": (
+            "🎬 <b>تبدیل‌کننده رسانه</b>\n\n"
+            "یک فایل ویدیو، صدا یا تصویر برایم بفرست تا آن را به فرمت یا کیفیت دیگری تبدیل کنم — "
+            "پشتیبانی از MP4/MP3/M4A/JPEG/PNG با چند پیش‌فرض کیفیت، تا فایل‌های بزرگ را قبل از ارسال کوچک کنید.\n\n"
+            "فقط یک فایل رسانه‌ای برایم بفرستید تا شروع شود."
+        ),
+        "convert_fetching": "⬇️ در حال دریافت فایل…",
+        "convert_fetch_failed": "❌ دریافت فایل ممکن نشد. لطفاً دوباره تلاش کنید.",
+        "convert_unsupported": "❌ این نوع فایل برای تبدیل پشتیبانی نمی‌شود.",
+        "convert_file_too_large": "❌ فایل از سقف {limit} مگابایتی تبدیل بزرگ‌تر است.",
+        "convert_choose_format": "🎯 <b>فرمت مقصد را انتخاب کنید:</b>",
+        "convert_choose_quality": "📐 <b>پیش‌فرض کیفیت را انتخاب کنید:</b>",
+        "convert_ready": "📦 تبدیل به <b>{format}</b> با کیفیت <b>{quality}</b>. برای شروع روی «تبدیل» بزنید.",
+        "convert_converting": "🔄 در حال تبدیل… {pct}% انجام شد",
+        "convert_done": "✅ تکمیل شد. در حال ارسال…",
+        "convert_failed": "❌ تبدیل ناموفق بود. لطفاً پیش‌فرض دیگری امتحان کنید.",
+        "convert_cancelled": "⏹️ تبدیل لغو شد.",
+        "convert_cancelling": "⏹️ در حال لغو…",
+        "button_convert_cancel": "❌ لغو",
         "podcast_disabled": (
             "🎙️ قسمت‌های پادکست را می‌توان از فید خود ناشر دریافت کرد، اما این ویژگی "
             "در حال حاضر غیرفعال است. صدای خود اسپاتیفای محافظت‌شده (DRM) است و هرگز دانلود نمی‌شود."

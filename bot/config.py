@@ -195,6 +195,17 @@ class Settings(BaseSettings):
     # x264 threads for the burn-in encode (kept modest so the queue stays fair).
     subtitle_threads: int = 2
 
+    # --- Media converter (video / audio / image quality reduction) -----------
+    # Master kill switch. When off, /convert and media-file conversion are
+    # disabled.
+    enable_converter: bool = True
+    # Maximum input file size (MB) accepted for conversion.
+    converter_max_input_mb: int = 500
+    # Timeout (seconds) for a single ffmpeg conversion.
+    converter_timeout_s: int = 3600
+    # Max concurrent ffmpeg conversions (CPU-bound; keep modest).
+    converter_max_concurrent: int = 3
+
     # --- Storage ---
     db_path: str = "data/savevideo.db"
     temp_dir: str = "tmp"
