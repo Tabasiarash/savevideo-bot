@@ -299,16 +299,55 @@ async def on_media_upload(message: Message, bot: Bot) -> None:
         # bot.download() relies on TelegramAPIServer.wrap_local_file.to_local(),
         # which is a no-op identity function for local Bot API servers — it cannot
         # resolve server-side file paths to local ones. Download manually instead.
-        file_info = await bot.get_file(file_id)
-        file_url = bot.session.api.file_url(bot.token, file_info.file_path)
-        stream = bot.session.stream_content(url=file_url, timeout=settings.download_timeout)
         try:
+            file_info = await bot.get_file(file_id)
+        except Exception as exc:  # noqa: BLE001
+            log.info("convert get_file failed: %s", exc, exc_info=True)
+            cleanup_dir(tmpdir)
+            await message.answer(text(lang, "convert_fetch_failed"))
+            return
+
+        file_url = bot.session.api.file_url(bot.token, file_info.file_path)
+        download_ok = False
+
+        # Method 1: HTTP download via stream_content()
+        try:
+            stream = bot.session.stream_content(
+                url=file_url, timeout=settings.download_timeout
+            )
             async with aiofiles.open(input_path, "wb") as f:
                 async for chunk in stream:
                     await f.write(chunk)
-        finally:
             await stream.aclose()
-    except Exception:  # noqa: BLE001
+            download_ok = True
+        except Exception as exc:  # noqa: BLE001
+            log.info(
+                "convert stream_content download failed: %s", exc, exc_info=True
+            )
+
+        # Method 2: Read from local filesystem (local Bot API server)
+        if not download_ok and file_info is not None:
+            try:
+                local_path = bot.session.api.wrap_local_file.to_local(
+                    file_info.file_path
+                )
+                async with aiofiles.open(local_path, "rb") as src, aiofiles.open(
+                    input_path, "wb"
+                ) as dst:
+                    async for chunk in src:
+                        await dst.write(chunk)
+                download_ok = True
+            except Exception as exc2:  # noqa: BLE001
+                log.info(
+                    "convert local file read failed: %s", exc2, exc_info=True
+                )
+
+        if not download_ok:
+            cleanup_dir(tmpdir)
+            await message.answer(text(lang, "convert_fetch_failed"))
+            return
+    except Exception as exc:  # noqa: BLE001
+        log.info("convert download failed: %s", exc, exc_info=True)
         cleanup_dir(tmpdir)
         await message.answer(text(lang, "convert_fetch_failed"))
         return
