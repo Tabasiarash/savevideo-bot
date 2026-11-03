@@ -205,6 +205,9 @@ class Settings(BaseSettings):
     converter_timeout_s: int = 3600
     # Max concurrent ffmpeg conversions (CPU-bound; keep modest).
     converter_max_concurrent: int = 3
+    # Default quality preset used for brand-new users (no saved preference).
+    converter_default_video: str = "mp4_720"
+    converter_default_audio: str = "mp3_128"
 
     # --- Storage ---
     db_path: str = "data/savevideo.db"

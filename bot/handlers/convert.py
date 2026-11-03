@@ -1,8 +1,8 @@
 """Media converter: video / audio / image quality reduction.
 
-Users send a media file (or use ``/convert``), pick a target format and quality
-preset, and receive the converted file (or a signed download link when it is
-too large for a direct Telegram upload).
+Users send a media file and the bot converts it to a target format/quality.
+If the user has a saved preset, conversion starts immediately (auto-convert).
+Otherwise the user picks a preset in one tap, which is saved for next time.
 
 Conversions run under a concurrency semaphore so ffmpeg does not overwhelm the
 host, and each user can cancel an in-progress conversion.
@@ -11,6 +11,7 @@ host, and each user can cancel an in-progress conversion.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -41,7 +42,9 @@ router = Router(name="convert")
 _FMT_PREFIX = "convert:fmt"      # convert:fmt:<kind>:<container>
 _QUAL_PREFIX = "convert:qual"    # convert:qual:<kind>:<container>:<preset>
 _GO_PREFIX = "convert:go"        # convert:go:<kind>:<container>:<preset>
+_AUTO_PREFIX = "convert:auto"    # convert:auto:<kind>:<container>:<preset>
 _CANCEL_PREFIX = "convert:cancel"  # convert:cancel:<kind>
+_CHANGE_PREFIX = "convert:change"  # convert:change:<kind>
 
 # Mapping container -> preset keys offered on the quality step.
 _FORMAT_PRESETS: dict[str, list[str]] = {
@@ -51,6 +54,32 @@ _FORMAT_PRESETS: dict[str, list[str]] = {
     "jpg": ["jpg_85", "jpg_75", "jpg_60", "jpg_40"],
     "png": ["png"],
     "audio": ["mp3_192", "m4a_128"],
+}
+
+# Combined format+quality presets for one-tap selection (first-time users).
+_AUTO_PRESETS: dict[str, list[tuple[str, str, str]]] = {
+    "video": [
+        ("mp4", "mp4_1080", "MP4 1080p"),
+        ("mp4", "mp4_720", "MP4 720p"),
+        ("mp4", "mp4_480", "MP4 480p"),
+        ("mp4", "mp4_audio", "MP4 → Audio (MP3)"),
+    ],
+    "audio": [
+        ("mp3", "mp3_320", "MP3 320k"),
+        ("mp3", "mp3_192", "MP3 192k"),
+        ("mp3", "mp3_128", "MP3 128k"),
+        ("mp3", "mp3_64", "MP3 64k"),
+        ("m4a", "m4a_256", "M4A 256k"),
+        ("m4a", "m4a_128", "M4A 128k"),
+        ("m4a", "m4a_64", "M4A 64k"),
+    ],
+    "image": [
+        ("jpg", "jpg_85", "JPEG 85%"),
+        ("jpg", "jpg_75", "JPEG 75%"),
+        ("jpg", "jpg_60", "JPEG 60%"),
+        ("jpg", "jpg_40", "JPEG 40%"),
+        ("png", "png", "PNG"),
+    ],
 }
 
 _FORMAT_LABELS: dict[str, str] = {
@@ -149,6 +178,21 @@ def _qual_keyboard(kind: str, container: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _auto_keyboard(kind: str) -> InlineKeyboardMarkup:
+    """One-tap keyboard combining format + quality (first-time users)."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"{_AUTO_PREFIX}:{kind}:{container}:{preset}",
+            )
+        ]
+        for container, preset, label in _AUTO_PRESETS.get(kind, [])
+    ]
+    rows.append([InlineKeyboardButton(text="❌ Cancel", callback_data=f"{_CANCEL_PREFIX}:{kind}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _go_keyboard(kind: str, container: str, preset: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -164,9 +208,11 @@ def _go_keyboard(kind: str, container: str, preset: str) -> InlineKeyboardMarkup
 
 
 def _control_keyboard(kind: str) -> InlineKeyboardMarkup:
+    """Inline keyboard shown while a conversion is in progress."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Cancel", callback_data=f"{_CANCEL_PREFIX}:{kind}")]
+            [InlineKeyboardButton(text="❌ Cancel", callback_data=f"{_CANCEL_PREFIX}:{kind}")],
+            [InlineKeyboardButton(text="⚙️ Change preset", callback_data=f"{_CHANGE_PREFIX}:{kind}")],
         ]
     )
 
@@ -182,16 +228,19 @@ async def cmd_convert(message: Message, bot: Bot) -> None:
     if await srv.db.is_banned(user.id):
         await message.answer(text(lang, "banned"))
         return
-    await message.answer(
-        text(lang, "convert_prompt"),
-    )
+    await message.answer(text(lang, "convert_prompt"))
 
 
 @router.message(
     F.document | F.video | F.audio | F.photo | F.voice | F.video_note
 )
 async def on_media_upload(message: Message, bot: Bot) -> None:
-    """Receive a user-uploaded media file, probe it, and offer conversion."""
+    """Receive a user-uploaded media file and convert it.
+
+    If the user has a saved conversion preset, start converting immediately
+    (auto-convert). Otherwise show a one-tap preset picker; the chosen preset
+    is saved for future uploads.
+    """
     srv = get_services()
     user = message.from_user
     if user is None:
@@ -210,7 +259,7 @@ async def on_media_upload(message: Message, bot: Bot) -> None:
         return
 
     # Determine file size for the early too-large check.
-    file_obj = message.document or message.video or message.audio or message.photo[-1] if message.photo else None
+    file_obj = message.document or message.video or message.audio or (message.photo[-1] if message.photo else None)
     file_size = getattr(file_obj, "file_size", None) or 0
     if file_size and file_size > settings.converter_max_input_mb * 1024 * 1024:
         await message.answer(
@@ -278,15 +327,155 @@ async def on_media_upload(message: Message, bot: Bot) -> None:
     )
     _convert_state[user.id] = state
 
-    containers = _available_containers(kind)
-    if not containers:
-        cleanup_dir(tmpdir)
-        _convert_state.pop(user.id, None)
-        await message.answer(text(lang, "convert_unsupported"))
+    # Check for a saved preset; if present, auto-convert immediately.
+    saved = await srv.db.get_convert_preset(user.id)
+    if saved:
+        try:
+            saved_preset = json.loads(saved)
+        except (TypeError, ValueError):
+            saved_preset = None
+        if saved_preset and isinstance(saved_preset, dict):
+            container = saved_preset.get("container")
+            preset = saved_preset.get("preset")
+            if container and preset and container in _available_containers(kind):
+                state.container = container
+                state.preset = preset
+                await _start_conversion_async(status, bot, state, lang)
+                return
+
+    # No saved preset: show one-tap preset picker.
+    body = text(lang, "convert_auto_no_preset")
+    await status.edit_text(body, reply_markup=_auto_keyboard(kind))
+
+
+async def _start_conversion_async(status: Message, bot: Bot, state: _ConvertState, lang: str) -> None:
+    """Async entry point for starting a conversion (rate-limit aware)."""
+    srv = get_services()
+    if not await srv.ratelimiter.start_job(state.user_id):
+        await links.edit_message(message=status, body=text(lang, "active_job"))
         return
 
-    body = text(lang, "convert_choose_format")
-    await status.edit_text(body, reply_markup=_fmt_keyboard(kind))
+    semaphore = asyncio.Semaphore(settings.converter_max_concurrent)
+    output_ext = {
+        "mp4": ".mp4", "mp3": ".mp3", "m4a": ".m4a", "jpg": ".jpg", "png": ".png", "audio": ".mp3",
+    }[state.container]
+    output_path = state.tmpdir / f"converted{output_ext}"
+
+    job = converter.ConvertJob(
+        input_path=state.input_path,
+        output_path=output_path,
+        media_type=state.kind,
+        preset=state.preset,
+    )
+
+    status_msg = status
+
+    async def on_progress(pct: float) -> None:
+        await links.edit_message(
+            message=status_msg,
+            body=text(lang, "convert_converting", pct=int(pct)),
+            reply_markup=_control_keyboard(state.kind),
+        )
+
+    try:
+        ok = await converter.convert_media(
+            job,
+            semaphore=semaphore,
+            timeout=settings.converter_timeout_s,
+            duration_s=state.duration_s,
+        )
+    except Exception:  # noqa: BLE001
+        log.info("converter failed", exc_info=True)
+        ok = False
+
+    if state.cancelled or not ok:
+        if state.cancelled:
+            await links.edit_message(message=status_msg, body=text(lang, "convert_cancelled"))
+        else:
+            await links.edit_message(message=status_msg, body=text(lang, "convert_failed"))
+        cleanup_dir(state.tmpdir)
+        _convert_state.pop(state.user_id, None)
+        await srv.ratelimiter.finish_job(state.user_id)
+        return
+
+    # Deliver: direct upload if under the limit, else signed download link.
+    size = output_path.stat().st_size
+    chat_id = status_msg.chat.id if status_msg else state.user_id
+
+    if settings.fits_upload_limit(size):
+        await _deliver_file(bot, chat_id, output_path, state.kind, lang)
+    elif srv.download_links.enabled:
+        try:
+            result = await srv.download_links.create(
+                srv.db, source=output_path, user_id=state.user_id, title=state.input_path.name
+            )
+            await links.edit_message(
+                message=status_msg,
+                body=text(
+                    lang,
+                    "link_ready",
+                    limit=settings.max_mb,
+                    hours=settings.download_link_ttl_hours,
+                    url=result.url,
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            log.info("converter link creation failed", exc_info=True)
+            await links.edit_message(message=status_msg, body=text(lang, "convert_failed"))
+    else:
+        await links.edit_message(message=status_msg, body=text(lang, "convert_failed"))
+
+    cleanup_dir(state.tmpdir)
+    _convert_state.pop(state.user_id, None)
+    await srv.ratelimiter.finish_job(state.user_id)
+
+
+async def _deliver_file(bot: Bot, chat_id: int, path: Path, kind: str, lang: str) -> None:
+    """Send a single converted file with the right Telegram method."""
+    try:
+        if kind == "video":
+            await bot.send_video(chat_id, FSInputFile(path), supports_streaming=True)
+        elif kind == "audio":
+            await bot.send_audio(chat_id, FSInputFile(path))
+        elif kind == "image":
+            await bot.send_photo(chat_id, FSInputFile(path))
+        else:
+            await bot.send_document(chat_id, FSInputFile(path))
+    except Exception:  # noqa: BLE001
+        log.info("converter direct upload failed", exc_info=True)
+        raise
+
+
+@router.callback_query(F.data.startswith(_AUTO_PREFIX))
+async def on_auto_convert(callback: CallbackQuery, bot: Bot) -> None:
+    """First-time user picked a combined format+quality preset: save + convert."""
+    await callback.answer()
+    parts = callback.data.split(":")
+    if len(parts) < 5:
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        return
+    kind = parts[2]
+    container = parts[3]
+    preset = parts[4]
+    user = callback.from_user
+    assert user is not None
+
+    srv = get_services()
+    lang = await srv.db.get_language(user.id) or settings.default_language
+
+    state = _convert_state.get(user.id)
+    if state is None or state.kind != kind:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
+        return
+
+    state.container = container
+    state.preset = preset
+
+    # Save preset for future auto-convert.
+    preset_json = json.dumps({"kind": kind, "container": container, "preset": preset})
+    await srv.db.set_convert_preset(user.id, preset_json)
+
+    await _start_conversion_async(callback.message, bot, state, lang)
 
 
 @router.callback_query(F.data.startswith(_FMT_PREFIX))
@@ -344,14 +533,17 @@ async def on_quality_pick(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     state.preset = preset
-    label = presets[preset]
-    body = text(lang, "convert_ready", format=_FORMAT_LABELS.get(container, container), quality=label)
-    await callback.message.edit_text(body, reply_markup=_go_keyboard(kind, container, preset))  # type: ignore[arg-type]
+
+    # Save preset for future auto-convert.
+    preset_json = json.dumps({"kind": kind, "container": container, "preset": preset})
+    await srv.db.set_convert_preset(user.id, preset_json)
+
+    await _start_conversion_async(callback.message, bot, state, lang)
 
 
 @router.callback_query(F.data.startswith(_GO_PREFIX))
 async def on_convert_go(callback: CallbackQuery, bot: Bot) -> None:
-    """Start the conversion."""
+    """Start the conversion (manual path confirmation)."""
     await callback.answer()
     parts = callback.data.split(":")
     if len(parts) < 5:
@@ -371,101 +563,34 @@ async def on_convert_go(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer(text(lang, "expired_selection"), show_alert=True)
         return
 
-    if not await srv.ratelimiter.start_job(user.id):
-        await callback.message.edit_text(text(lang, "active_job"))  # type: ignore[arg-type]
+    await _start_conversion_async(callback.message, bot, state, lang)
+
+
+@router.callback_query(F.data.startswith(_CHANGE_PREFIX))
+async def on_convert_change_preset(callback: CallbackQuery, bot: Bot) -> None:
+    """User wants to pick a different preset during/after conversion."""
+    await callback.answer()
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer(text(settings.default_language, "expired_selection"), show_alert=True)
+        return
+    kind = parts[2]
+    user = callback.from_user
+    assert user is not None
+    srv = get_services()
+    lang = await srv.db.get_language(user.id) or settings.default_language
+
+    state = _convert_state.get(user.id)
+    if state is None or state.kind != kind:
+        await callback.answer(text(lang, "expired_selection"), show_alert=True)
         return
 
-    semaphore = asyncio.Semaphore(settings.converter_max_concurrent)
-    output_ext = {
-        "mp4": ".mp4", "mp3": ".mp3", "m4a": ".m4a", "jpg": ".jpg", "png": ".png", "audio": ".mp3",
-    }[container]
-    output_path = state.tmpdir / f"converted{output_ext}"
-
-    job = converter.ConvertJob(
-        input_path=state.input_path,
-        output_path=output_path,
-        media_type=kind,
-        preset=preset,
+    # Cancel any in-progress conversion and show the picker.
+    state.cancelled = True
+    await callback.message.edit_text(
+        text(lang, "convert_auto_no_preset"),
+        reply_markup=_auto_keyboard(kind),
     )
-
-    status_msg = callback.message
-    done = {"n": 0}
-
-    async def on_progress(pct: float) -> None:
-        done["n"] = pct
-        await links.edit_message(
-            message=status_msg,
-            body=text(lang, "convert_converting", pct=int(pct)),
-            reply_markup=_control_keyboard(kind),
-        )
-
-    try:
-        ok = await converter.convert_media(
-            job,
-            semaphore=semaphore,
-            timeout=settings.converter_timeout_s,
-            duration_s=state.duration_s,
-        )
-    except Exception:  # noqa: BLE001
-        log.info("converter failed", exc_info=True)
-        ok = False
-
-    if state.cancelled or not ok:
-        if state.cancelled:
-            await links.edit_message(message=status_msg, body=text(lang, "convert_cancelled"))
-        else:
-            await links.edit_message(message=status_msg, body=text(lang, "convert_failed"))
-        cleanup_dir(state.tmpdir)
-        _convert_state.pop(user.id, None)
-        await srv.ratelimiter.finish_job(user.id)
-        return
-
-    # Deliver: direct upload if under the limit, else signed download link.
-    size = output_path.stat().st_size
-    chat_id = status_msg.chat.id if status_msg else user.id
-
-    if settings.fits_upload_limit(size):
-        await _deliver_file(bot, chat_id, output_path, kind, lang)
-    elif srv.download_links.enabled:
-        try:
-            result = await srv.download_links.create(
-                srv.db, source=output_path, user_id=user.id, title=state.input_path.name
-            )
-            await links.edit_message(
-                message=status_msg,
-                body=text(
-                    lang,
-                    "link_ready",
-                    limit=settings.max_mb,
-                    hours=settings.download_link_ttl_hours,
-                    url=result.url,
-                ),
-            )
-        except Exception:  # noqa: BLE001
-            log.info("converter link creation failed", exc_info=True)
-            await links.edit_message(message=status_msg, body=text(lang, "convert_failed"))
-    else:
-        await links.edit_message(message=status_msg, body=text(lang, "convert_failed"))
-
-    cleanup_dir(state.tmpdir)
-    _convert_state.pop(user.id, None)
-    await srv.ratelimiter.finish_job(user.id)
-
-
-async def _deliver_file(bot: Bot, chat_id: int, path: Path, kind: str, lang: str) -> None:
-    """Send a single converted file with the right Telegram method."""
-    try:
-        if kind == "video":
-            await bot.send_video(chat_id, FSInputFile(path), supports_streaming=True)
-        elif kind == "audio":
-            await bot.send_audio(chat_id, FSInputFile(path))
-        elif kind == "image":
-            await bot.send_photo(chat_id, FSInputFile(path))
-        else:
-            await bot.send_document(chat_id, FSInputFile(path))
-    except Exception:  # noqa: BLE001
-        log.info("converter direct upload failed", exc_info=True)
-        raise
 
 
 @router.callback_query(F.data.startswith(_CANCEL_PREFIX))

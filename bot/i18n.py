@@ -247,6 +247,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "convert_fetch_failed": "❌ Could not download your file. Please try again.",
         "convert_unsupported": "❌ That file type isn't supported for conversion.",
         "convert_file_too_large": "❌ File is larger than the {limit} MB conversion limit.",
+        "convert_auto_start": (
+            "🔄 Auto-converting with your saved preset: <b>{preset}</b>…\n"
+            "Tap <b>⚙️ Change preset</b> to pick another."
+        ),
+        "convert_auto_no_preset": (
+            "🎯 Pick a conversion preset for this file. Your choice will be saved "
+            "for next time."
+        ),
         "convert_choose_format": "🎯 <b>Choose a target format:</b>",
         "convert_choose_quality": "📐 <b>Choose a quality preset:</b>",
         "convert_ready": "📦 Convert to <b>{format}</b> at <b>{quality}</b>. Tap <b>Convert</b> to start.",
@@ -256,6 +264,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "convert_cancelled": "⏹️ Conversion cancelled.",
         "convert_cancelling": "⏹️ Cancelling…",
         "button_convert_cancel": "❌ Cancel",
+        "button_convert_change_preset": "⚙️ Change preset",
         "podcast_disabled": (
             "🎙️ Podcast episodes can be fetched from the publisher's own feed, but this "
             "feature is currently disabled. Spotify audio itself is DRM-protected and never downloaded."
@@ -554,6 +563,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "convert_cancelled": "⏹️ Konvertierung abgebrochen.",
         "convert_cancelling": "⏹️ Wird abgebrochen…",
         "button_convert_cancel": "❌ Abbrechen",
+        "convert_auto_start": (
+            "🔄 Konvertiere automatisch mit deinem gespeicherten Preset: <b>{preset}</b>…\n"
+            "Tippe auf <b>⚙️ Preset ändern</b>, um einen anderen zu wählen."
+        ),
+        "convert_auto_no_preset": (
+            "🎯 Wähle ein Konvertierungs-Preset für diese Datei aus. Deine Wahl wird "
+            "für das nächste Mal gespeichert."
+        ),
+        "button_convert_change_preset": "⚙️ Preset ändern",
         "podcast_disabled": (
             "🎙️ Podcast-Folgen können aus dem Feed des Herausgebers geladen werden, aber "
             "diese Funktion ist derzeit deaktiviert. Spotify-Audio selbst ist DRM-geschützt "
@@ -846,6 +864,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "convert_cancelled": "⏹️ تبدیل لغو شد.",
         "convert_cancelling": "⏹️ در حال لغو…",
         "button_convert_cancel": "❌ لغو",
+        "convert_auto_start": (
+            "🔄 تبدیل خودکار با پیش‌فرض ذخیره‌شده: <b>{preset}</b>…\n"
+            "برای تغییر روی «⚙️ تغییر پیش‌فرض» بزنید."
+        ),
+        "convert_auto_no_preset": (
+            "🎯 یک پیش‌فرض تبدیل برای این فایل انتخاب کنید. انتخاب شما برای دفعات بعد ذخیره می‌شود."
+        ),
+        "button_convert_change_preset": "⚙️ تغییر پیش‌فرض",
         "podcast_disabled": (
             "🎙️ قسمت‌های پادکست را می‌توان از فید خود ناشر دریافت کرد، اما این ویژگی "
             "در حال حاضر غیرفعال است. صدای خود اسپاتیفای محافظت‌شده (DRM) است و هرگز دانلود نمی‌شود."

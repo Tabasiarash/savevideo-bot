@@ -143,6 +143,10 @@ MIGRATIONS: dict[int, list[str]] = {
         # Per-user preferred subtitle delivery mode (burn / embed / srt).
         "ALTER TABLE users ADD COLUMN subtitle_mode TEXT",
     ],
+    6: [
+        # Per-user preferred converter preset (JSON: kind/container/preset).
+        "ALTER TABLE users ADD COLUMN convert_preset TEXT",
+    ],
 }
 
 
@@ -240,6 +244,20 @@ class Database:
 
     async def set_subtitle_mode(self, user_id: int, mode: str) -> None:
         await self._execute("UPDATE users SET subtitle_mode = ? WHERE id = ?", (mode, user_id))
+
+    async def get_convert_preset(self, user_id: int) -> str | None:
+        row = await self.get_user(user_id)
+        return row["convert_preset"] if row else None
+
+    async def set_convert_preset(self, user_id: int, preset: str) -> None:
+        await self._execute(
+            """
+            INSERT INTO users (id, username, first_seen, last_seen, banned, active, convert_preset)
+            VALUES (?, ?, ?, ?, 0, 1, ?)
+            ON CONFLICT(id) DO UPDATE SET convert_preset = ?
+            """,
+            (user_id, None, int(time.time()), int(time.time()), preset, preset),
+        )
 
     async def is_banned(self, user_id: int) -> bool:
         row = await self.get_user(user_id)

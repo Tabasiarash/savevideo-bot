@@ -1,9 +1,11 @@
 """Handler tests for the media converter (bot/handlers/convert.py)."""
 
+import json
 from types import SimpleNamespace
 
 from bot.handlers import convert
-from tests.conftest import FakeMessage
+from bot.services.converter import MediaInfo
+from tests.conftest import USER_ID, FakeMessage
 
 
 def _media_message(kind: str, file_id: str = "file123", size: int = 1000) -> FakeMessage:
@@ -36,6 +38,12 @@ def _media_message(kind: str, file_id: str = "file123", size: int = 1000) -> Fak
     return msg
 
 
+def _mock_probe(monkeypatch, kind: str = "video"):
+    async def fake_probe(path):
+        return MediaInfo(kind=kind, duration_s=60.0, size_bytes=1000)
+    monkeypatch.setattr(convert.converter, "probe_media", fake_probe)
+
+
 async def test_cmd_convert(services, bot, make_message):
     msg = make_message(text="/convert")
     await convert.cmd_convert(msg, bot)
@@ -48,16 +56,17 @@ async def test_media_upload_unsupported(services, bot, make_message):
     assert any("supported" in s.lower() for s in msg.sent)
 
 
-async def test_media_upload_shows_format_keyboard(services, bot, make_message, monkeypatch, settings):
+async def test_media_upload_shows_auto_presets(services, bot, make_message, monkeypatch, settings):
+    _mock_probe(monkeypatch, "video")
     msg = _media_message("video")
     await convert.on_media_upload(msg, bot)
 
-    # Should offer format selection (edit replaces the fetching message).
-    assert msg.edits and "Choose a target format" in msg.edits[-1]
+    # Should show one-tap preset picker (not format+quality separately).
+    assert msg.edits and "conversion preset" in msg.edits[-1].lower()
     markup = msg.markups[-1]
     cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert "convert:fmt:video:mp4" in cbs
-    assert "convert:fmt:video:audio" in cbs
+    assert "convert:auto:video:mp4:mp4_720" in cbs
+    assert "convert:auto:video:mp4:mp4_480" in cbs
 
     # State stored.
     assert 42 in convert._convert_state
@@ -65,64 +74,12 @@ async def test_media_upload_shows_format_keyboard(services, bot, make_message, m
     assert state.kind == "video"
 
 
-async def test_format_pick_shows_quality(services, bot, make_message, monkeypatch, settings):
+async def test_auto_convert_saves_and_converts(services, bot, make_message, monkeypatch, settings):
+    _mock_probe(monkeypatch, "video")
     msg = _media_message("video")
     await convert.on_media_upload(msg, bot)
     state = convert._convert_state[42]
     state.status_message = msg
-
-    cb_msg = make_message()
-    cb = SimpleNamespace(
-        data="convert:fmt:video:mp4",
-        from_user=SimpleNamespace(id=42, language_code="en"),
-        message=cb_msg,
-        answers=[],
-    )
-    async def answer(*a, **k):
-        cb.answers.append(a)
-    cb.answer = answer
-    await convert.on_format_pick(cb, bot)
-
-    assert cb_msg.edits and "Choose a quality preset" in cb_msg.edits[-1]
-    markup = cb_msg.markups[-1]
-    cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert "convert:qual:video:mp4:mp4_1080" in cbs
-    assert state.container == "mp4"
-
-
-async def test_quality_pick_shows_go(services, bot, make_message, monkeypatch, settings):
-    msg = _media_message("video")
-    await convert.on_media_upload(msg, bot)
-    state = convert._convert_state[42]
-    state.status_message = msg
-    state.container = "mp4"
-
-    cb_msg = make_message()
-    cb = SimpleNamespace(
-        data="convert:qual:video:mp4:mp4_720",
-        from_user=SimpleNamespace(id=42, language_code="en"),
-        message=cb_msg,
-        answers=[],
-    )
-    async def answer(*a, **k):
-        cb.answers.append(a)
-    cb.answer = answer
-    await convert.on_quality_pick(cb, bot)
-
-    assert cb_msg.edits and "Convert" in cb_msg.edits[-1]
-    markup = cb_msg.markups[-1]
-    cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert "convert:go:video:mp4:mp4_720" in cbs
-    assert state.preset == "mp4_720"
-
-
-async def test_convert_go_sends_file(services, bot, make_message, monkeypatch, settings):
-    msg = _media_message("video")
-    await convert.on_media_upload(msg, bot)
-    state = convert._convert_state[42]
-    state.status_message = msg
-    state.container = "mp4"
-    state.preset = "mp4_720"
 
     # Mock convert_media to create an output file and report success.
     output_path = state.tmpdir / "converted.mp4"
@@ -136,7 +93,7 @@ async def test_convert_go_sends_file(services, bot, make_message, monkeypatch, s
 
     cb_msg = make_message()
     cb = SimpleNamespace(
-        data="convert:go:video:mp4:mp4_720",
+        data="convert:auto:video:mp4:mp4_720",
         from_user=SimpleNamespace(id=42, language_code="en"),
         message=cb_msg,
         answers=[],
@@ -144,47 +101,77 @@ async def test_convert_go_sends_file(services, bot, make_message, monkeypatch, s
     async def answer(*a, **k):
         cb.answers.append(a)
     cb.answer = answer
-    await convert.on_convert_go(cb, bot)
+    await convert.on_auto_convert(cb, bot)
 
     # A video file should have been sent.
     assert len(bot.videos) == 1
     assert bot.videos[0][0] == 42
+
+    # Preset saved for future auto-convert.
+    saved = await services.db.get_convert_preset(USER_ID)
+    assert saved is not None
+    parsed = json.loads(saved)
+    assert parsed["kind"] == "video"
+    assert parsed["container"] == "mp4"
+    assert parsed["preset"] == "mp4_720"
+
     # State cleaned up.
     assert 42 not in convert._convert_state
 
 
-async def test_convert_go_cancelled(services, bot, make_message, monkeypatch, settings):
+async def test_auto_convert_with_saved_preset(services, bot, make_message, monkeypatch, settings):
+    """User with a saved preset gets auto-conversion immediately."""
+    await services.db.set_convert_preset(USER_ID, json.dumps({"kind": "video", "container": "mp4", "preset": "mp4_720"}))
+
+    _mock_probe(monkeypatch, "video")
     msg = _media_message("video")
-    await convert.on_media_upload(msg, bot)
-    state = convert._convert_state[42]
-    state.status_message = msg
-    state.container = "mp4"
-    state.preset = "mp4_720"
-    state.cancelled = True
 
-    # Mock convert_media to return failure quickly (no real ffmpeg).
+    # Mock convert_media to capture the job and create an output file.
+    captured_job = None
+    convert_called = False
+    captured_content = None
+
     async def fake_convert(job, *, semaphore=None, timeout=None, duration_s=0.0):
-        return False
+        nonlocal captured_job, output_path, convert_called, captured_content
+        convert_called = True
+        captured_job = job
+        output_path = job.output_path
+        output_path.write_bytes(b"converted-video-bytes")
+        captured_content = output_path.read_bytes()
+        return True
 
+    output_path = None
     monkeypatch.setattr(convert.converter, "convert_media", fake_convert)
+    await convert.on_media_upload(msg, bot)
 
-    cb_msg = make_message()
-    cb = SimpleNamespace(
-        data="convert:go:video:mp4:mp4_720",
-        from_user=SimpleNamespace(id=42, language_code="en"),
-        message=cb_msg,
-        answers=[],
-    )
-    async def answer(*a, **k):
-        cb.answers.append(a)
-    cb.answer = answer
-    await convert.on_convert_go(cb, bot)
+    # Auto-conversion starts immediately (no picker shown).
+    assert convert_called, "convert_media was not called"
+    assert len(bot.videos) == 1
+    assert bot.videos[0][0] == 42
 
-    assert any("cancelled" in s.lower() for s in cb_msg.edits)
+    # Correct preset was used.
+    assert captured_job is not None
+    assert captured_job.media_type == "video"
+    assert captured_job.preset == "mp4_720"
+
+    # Preset saved for future auto-convert.
+    saved = await services.db.get_convert_preset(USER_ID)
+    assert saved is not None
+    parsed = json.loads(saved)
+    assert parsed["kind"] == "video"
+    assert parsed["container"] == "mp4"
+    assert parsed["preset"] == "mp4_720"
+
+    # Output file content was captured inside the mock.
+    assert output_path is not None
+    assert captured_content == b"converted-video-bytes"
+
+    # State cleaned up after conversion.
     assert 42 not in convert._convert_state
 
 
 async def test_convert_cancel_callback(services, bot, make_message, monkeypatch, settings):
+    _mock_probe(monkeypatch, "video")
     msg = _media_message("video")
     await convert.on_media_upload(msg, bot)
     state = convert._convert_state[42]
