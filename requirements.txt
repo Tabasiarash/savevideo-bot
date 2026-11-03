@@ -3,6 +3,7 @@ aiogram>=3.13,<4
 # aiohttp is imported directly by bot/utils.py (redirect-chain validation for
 # generic hosts); aiogram already pulls it in, but we depend on it explicitly.
 aiohttp>=3.9,<4
+aiofiles>=23.1
 aiosqlite>=0.20,<1
 yt-dlp[default,curl-cffi]>=2024.1.1
 # YouTube PO tokens are solved by yt-dlp's built-in EJS (the yt-dlp-ejs part of

@@ -145,6 +145,7 @@ class FakeUpdater:
 
 class FakeBot:
     def __init__(self) -> None:
+        self.token = "testbot:TOKEN"
         self.videos: list[tuple] = []
         self.audios: list[tuple] = []
         self.documents: list[tuple] = []
@@ -153,10 +154,20 @@ class FakeBot:
         self.groups: list[object] = []
         self.messages: list[tuple[int, str]] = []
         self.raise_for: set[int] = set()
-        self.session = SimpleNamespace(close=self._close)
+        self.session = SimpleNamespace(close=self._close, api=SimpleNamespace(file_url=self._file_url), stream_content=self.stream_content)
 
     async def _close(self) -> None:  # pragma: no cover
         pass
+
+    def _file_url(self, token: str, path: str | Path) -> str:
+        return f"https://api.telegram.org/file/bot{token}/{path}"
+
+    async def stream_content(self, url: str, *, timeout: int = 30, chunk_size: int = 65536, raise_for_status: bool = True):
+        """Fake stream_content: yields fake media bytes."""
+        yield b"fake-media-content"
+
+    async def get_file(self, file_id: str):
+        return SimpleNamespace(file_id=file_id, file_path=f"files/{file_id}")
 
     async def me(self):
         return SimpleNamespace(username="testbot", id=1)

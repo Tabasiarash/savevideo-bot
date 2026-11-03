@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import aiofiles
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
@@ -295,7 +296,18 @@ async def on_media_upload(message: Message, bot: Bot) -> None:
 
         status = await message.answer(text(lang, "convert_fetching"))
         input_path = tmpdir / "input"
-        await bot.download(file_id, destination=input_path)
+        # bot.download() relies on TelegramAPIServer.wrap_local_file.to_local(),
+        # which is a no-op identity function for local Bot API servers — it cannot
+        # resolve server-side file paths to local ones. Download manually instead.
+        file_info = await bot.get_file(file_id)
+        file_url = bot.session.api.file_url(bot.token, file_info.file_path)
+        stream = bot.session.stream_content(url=file_url, timeout=settings.download_timeout)
+        try:
+            async with aiofiles.open(input_path, "wb") as f:
+                async for chunk in stream:
+                    await f.write(chunk)
+        finally:
+            await stream.aclose()
     except Exception:  # noqa: BLE001
         cleanup_dir(tmpdir)
         await message.answer(text(lang, "convert_fetch_failed"))
