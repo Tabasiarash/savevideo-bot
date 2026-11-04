@@ -296,9 +296,12 @@ async def on_media_upload(message: Message, bot: Bot) -> None:
 
         status = await message.answer(text(lang, "convert_fetching"))
         input_path = tmpdir / "input"
-        # bot.download() relies on TelegramAPIServer.wrap_local_file.to_local(),
-        # which is a no-op identity function for local Bot API servers — it cannot
-        # resolve server-side file paths to local ones. Download manually instead.
+
+        # Download the file from Telegram servers.
+        # bot.download() is the standard aiogram method. For local Bot API
+        # servers it may fail because wrap_local_file.to_local() returns the
+        # server path unchanged, so we also try HTTP download and local
+        # filesystem read as fallbacks.
         try:
             file_info = await bot.get_file(file_id)
         except Exception as exc:  # noqa: BLE001
@@ -307,26 +310,38 @@ async def on_media_upload(message: Message, bot: Bot) -> None:
             await message.answer(text(lang, "convert_fetch_failed"))
             return
 
-        file_url = bot.session.api.file_url(bot.token, file_info.file_path)
+        if not file_info.file_path:
+            log.info("convert file_path is None for file_id=%s", file_id)
+            cleanup_dir(tmpdir)
+            await message.answer(text(lang, "convert_fetch_failed"))
+            return
+
         download_ok = False
 
-        # Method 1: HTTP download via stream_content()
+        # Method 1: bot.download() — aiogram's built-in downloader
         try:
-            stream = bot.session.stream_content(
-                url=file_url, timeout=settings.download_timeout
-            )
-            async with aiofiles.open(input_path, "wb") as f:
-                async for chunk in stream:
-                    await f.write(chunk)
-            await stream.aclose()
+            await bot.download(file_id, destination=input_path)
             download_ok = True
         except Exception as exc:  # noqa: BLE001
-            log.info(
-                "convert stream_content download failed: %s", exc, exc_info=True
-            )
+            log.info("convert bot.download failed: %s", exc, exc_info=True)
 
-        # Method 2: Read from local filesystem (local Bot API server)
-        if not download_ok and file_info is not None:
+        # Method 2: HTTP download via stream_content()
+        if not download_ok:
+            try:
+                file_url = bot.session.api.file_url(bot.token, file_info.file_path)
+                stream = bot.session.stream_content(
+                    url=file_url, timeout=settings.download_timeout
+                )
+                async with aiofiles.open(input_path, "wb") as f:
+                    async for chunk in stream:
+                        await f.write(chunk)
+                await stream.aclose()
+                download_ok = True
+            except Exception as exc:  # noqa: BLE001
+                log.info("convert stream_content download failed: %s", exc, exc_info=True)
+
+        # Method 3: Read from local filesystem (local Bot API server)
+        if not download_ok and file_info.file_path:
             try:
                 local_path = bot.session.api.wrap_local_file.to_local(
                     file_info.file_path
@@ -338,9 +353,7 @@ async def on_media_upload(message: Message, bot: Bot) -> None:
                         await dst.write(chunk)
                 download_ok = True
             except Exception as exc2:  # noqa: BLE001
-                log.info(
-                    "convert local file read failed: %s", exc2, exc_info=True
-                )
+                log.info("convert local file read failed: %s", exc2, exc_info=True)
 
         if not download_ok:
             cleanup_dir(tmpdir)
